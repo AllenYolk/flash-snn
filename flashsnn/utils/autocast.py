@@ -1,3 +1,6 @@
+"""Borrowed from:
+https://github.com/fla-org/flash-linear-attention/blob/main/fla/utils.py
+"""
 from functools import lru_cache, partial
 from packaging import version
 
@@ -15,3 +18,6 @@ if _check_pytorch_version('2.4'):
 else:
     amp_custom_fwd = torch.cuda.amp.custom_fwd
     amp_custom_bwd = torch.cuda.amp.custom_bwd
+
+# amp_custom_fwd(): cast inputs to the dtype specified by torch.amp.autocast()
+# amp_custom_bwd(): cast outputs to the dtype specified by torch.amp.autocast()

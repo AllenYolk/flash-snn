@@ -8,7 +8,7 @@ import contextlib
 import torch
 
 
-def continuous_and_device_guard(f: Callable) -> Callable:
+def contiguous_and_device_guard(f: Callable) -> Callable:
     """Make sure all input tensors are contiguous and set to the same device.
     """
 
