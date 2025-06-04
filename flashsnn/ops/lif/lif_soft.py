@@ -8,7 +8,7 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 
 
 @triton.jit
-def _multistep_lif_hard_inference_kernel(
+def _multistep_lif_soft_inference_kernel(
     x_seq_ptr,  # [T, N, C, L]
     s_seq_ptr,
     beta,
@@ -37,7 +37,7 @@ def _multistep_lif_hard_inference_kernel(
 
         h = beta*v + x  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
-        v = h * (one-s)  # hard_reset, v_reset = 0
+        v = h - s  # soft_reset, v_th = 1
 
         s_ptrs = tl.make_block_ptr(
             s_seq_ptr,
@@ -51,7 +51,7 @@ def _multistep_lif_hard_inference_kernel(
 
 
 @triton.jit
-def _multistep_lif_hard_forward_kernel(
+def _multistep_lif_soft_forward_kernel(
     x_seq_ptr,  # [T, N, C, L]
     s_seq_ptr,
     h_seq_ptr,
@@ -81,7 +81,7 @@ def _multistep_lif_hard_forward_kernel(
 
         h = beta*v + x  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
-        v = h * (one-s)  # hard_reset, v_reset = 0
+        v = h - s  # soft_reset, v_th = 1
 
         s_ptrs = tl.make_block_ptr(
             s_seq_ptr,
@@ -104,7 +104,7 @@ def _multistep_lif_hard_forward_kernel(
 
 
 @triton.jit
-def _multistep_lif_hard_atan_not_detached_backward_kernel(
+def _multistep_lif_soft_atan_not_detached_backward_kernel(
     grad_s_seq_ptr,
     h_seq_ptr,
     s_seq_ptr,
@@ -156,7 +156,7 @@ def _multistep_lif_hard_atan_not_detached_backward_kernel(
 
         sg = pi * (h-one)
         sg = (one / (one + sg*sg)).to(dtype)
-        grad_v = (grad_s - grad_v*h) * sg + grad_v * (one-s)
+        grad_v = (grad_s-grad_v) * sg + grad_v
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,
@@ -171,7 +171,7 @@ def _multistep_lif_hard_atan_not_detached_backward_kernel(
 
 
 @triton.jit
-def _multistep_lif_hard_atan_detached_backward_kernel(
+def _multistep_lif_soft_atan_detached_backward_kernel(
     grad_s_seq_ptr,
     h_seq_ptr,
     s_seq_ptr,
@@ -223,7 +223,7 @@ def _multistep_lif_hard_atan_detached_backward_kernel(
 
         sg = pi * (h-one)
         sg = (one / (one + sg*sg)).to(dtype)
-        grad_v = grad_s*sg + grad_v * (one-s)
+        grad_v = grad_s*sg + grad_v
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,
@@ -237,7 +237,7 @@ def _multistep_lif_hard_atan_detached_backward_kernel(
         grad_v = grad_v * beta
 
 
-def multistep_lif_hard_inference(x_seq: torch.Tensor, beta: float):
+def multistep_lif_soft_inference(x_seq: torch.Tensor, beta: float):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
     s_seq = torch.empty_like(x_seq)
@@ -245,7 +245,7 @@ def multistep_lif_hard_inference(x_seq: torch.Tensor, beta: float):
     BLOCK_NCL = 128
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    _multistep_lif_hard_inference_kernel[grid](
+    _multistep_lif_soft_inference_kernel[grid](
         x_seq,
         s_seq,
         beta,
@@ -257,7 +257,7 @@ def multistep_lif_hard_inference(x_seq: torch.Tensor, beta: float):
     return s_seq
 
 
-def multistep_lif_hard_forward(x_seq: torch.Tensor, beta: float):
+def multistep_lif_soft_forward(x_seq: torch.Tensor, beta: float):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
     s_seq = torch.empty_like(x_seq)
@@ -266,7 +266,7 @@ def multistep_lif_hard_forward(x_seq: torch.Tensor, beta: float):
     BLOCK_NCL = 128
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    _multistep_lif_hard_forward_kernel[grid](
+    _multistep_lif_soft_forward_kernel[grid](
         x_seq,
         s_seq,
         h_seq,
@@ -279,7 +279,7 @@ def multistep_lif_hard_forward(x_seq: torch.Tensor, beta: float):
     return s_seq, h_seq
 
 
-def multistep_lif_hard_atan_not_detached_backward(
+def multistep_lif_soft_atan_not_detached_backward(
     grad_s_seq: torch.Tensor, h_seq: torch.Tensor, s_seq: torch.Tensor,
     beta: float
 ):
@@ -290,7 +290,7 @@ def multistep_lif_hard_atan_not_detached_backward(
     BLOCK_NCL = 128
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    _multistep_lif_hard_atan_not_detached_backward_kernel[grid](
+    _multistep_lif_soft_atan_not_detached_backward_kernel[grid](
         grad_s_seq,
         h_seq,
         s_seq,
@@ -304,7 +304,7 @@ def multistep_lif_hard_atan_not_detached_backward(
     return grad_x_seq
 
 
-def multistep_lif_hard_atan_detached_backward(
+def multistep_lif_soft_atan_detached_backward(
     grad_s_seq: torch.Tensor, h_seq: torch.Tensor, s_seq: torch.Tensor,
     beta: float
 ):
@@ -315,7 +315,7 @@ def multistep_lif_hard_atan_detached_backward(
     BLOCK_NCL = 128
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    _multistep_lif_hard_atan_detached_backward_kernel[grid](
+    _multistep_lif_soft_atan_detached_backward_kernel[grid](
         grad_s_seq,
         h_seq,
         s_seq,
@@ -329,18 +329,18 @@ def multistep_lif_hard_atan_detached_backward(
     return grad_x_seq
 
 
-class MultistepLIFAtanHardNotDetachedFunction(autograd.Function):
+class MultistepLIFAtanSoftNotDetachedFunction(autograd.Function):
 
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(ctx, x_seq: torch.Tensor, beta: float):
         if any(ctx.needs_input_grad):
-            s_seq, h_seq = multistep_lif_hard_forward(x_seq, beta)
+            s_seq, h_seq = multistep_lif_soft_forward(x_seq, beta)
             ctx.save_for_backward(h_seq, s_seq)
             ctx.beta = beta
         else:
-            s_seq = multistep_lif_hard_inference(x_seq, beta)
+            s_seq = multistep_lif_soft_inference(x_seq, beta)
         return s_seq
 
     @staticmethod
@@ -348,24 +348,24 @@ class MultistepLIFAtanHardNotDetachedFunction(autograd.Function):
     @amp_custom_bwd
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq, s_seq = ctx.saved_tensors
-        grad_x_seq = multistep_lif_hard_atan_not_detached_backward(
+        grad_x_seq = multistep_lif_soft_atan_not_detached_backward(
             grad_s_seq, h_seq, s_seq, ctx.beta
         )
         return grad_x_seq, None
 
 
-class MultistepLIFAtanHardDetachedFunction(autograd.Function):
+class MultistepLIFAtanSoftDetachedFunction(autograd.Function):
 
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(ctx, x_seq: torch.Tensor, beta: float):
         if any(ctx.needs_input_grad):
-            s_seq, h_seq = multistep_lif_hard_forward(x_seq, beta)
+            s_seq, h_seq = multistep_lif_soft_forward(x_seq, beta)
             ctx.save_for_backward(h_seq, s_seq)
             ctx.beta = beta
         else:
-            s_seq = multistep_lif_hard_inference(x_seq, beta)
+            s_seq = multistep_lif_soft_inference(x_seq, beta)
         return s_seq
 
     @staticmethod
@@ -373,7 +373,7 @@ class MultistepLIFAtanHardDetachedFunction(autograd.Function):
     @amp_custom_bwd
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq, s_seq = ctx.saved_tensors
-        grad_x_seq = multistep_lif_hard_atan_detached_backward(
+        grad_x_seq = multistep_lif_soft_atan_detached_backward(
             grad_s_seq, h_seq, s_seq, ctx.beta
         )
         return grad_x_seq, None
