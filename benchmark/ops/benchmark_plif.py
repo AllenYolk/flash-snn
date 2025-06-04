@@ -7,7 +7,7 @@ import torch.nn as nn
 import triton
 from spikingjelly.activation_based import surrogate
 
-from flashsnn.ops import lif
+from flashsnn.ops import plif
 
 DEVICE = "cuda"
 DTYPE = torch.float32
@@ -17,42 +17,7 @@ SG = "atan"
 SOFT_RESET = False
 
 
-class VanillaLIF(nn.Module):
-
-    def __init__(
-        self, beta: float, detach_reset: bool, sg: str, soft_reset: bool,
-        dtype: torch.dtype
-    ):
-        super().__init__()
-        self.beta = torch.tensor(beta).to(dtype)
-        self.detach_reset = detach_reset
-        if sg.lower() == "atan":
-            self.sg = surrogate.ATan()
-        else:
-            self.sg = surrogate.ATan()
-        self.soft_reset = soft_reset
-
-    def forward(self, x_seq: torch.Tensor):
-        v = torch.zeros_like(x_seq[0])
-        s_seq = torch.empty_like(x_seq)
-        for t in range(x_seq.shape[0]):
-            v = self.beta * v + x_seq[t]
-            s = self.sg(v - 1.)
-            if self.soft_reset:
-                if self.detach_reset:
-                    v = v - s.detach()
-                else:
-                    v = v - s
-            else:
-                if self.detach_reset:
-                    v = v * (1. - s.detach())
-                else:
-                    v = v * (1.-s)
-            s_seq[t] = s
-        return s_seq
-
-
-def get_lif_autograd_function(detach_reset: bool, sg: str, soft_reset: bool):
+def get_plif_autograd_function(detach_reset: bool, sg: str, soft_reset: bool):
     if sg.lower() == "atan":
         s1 = "Atan"
     else:
@@ -68,7 +33,48 @@ def get_lif_autograd_function(detach_reset: bool, sg: str, soft_reset: bool):
     else:
         s3 = "NotDetached"
 
-    return getattr(lif, f"MultistepLIF{s1}{s2}{s3}Function").apply
+    return getattr(plif, f"MultistepPLIF{s1}{s2}{s3}Function").apply
+
+
+class VanillaPLIF(nn.Module):
+
+    def __init__(
+        self, beta_init: float, detach_reset: bool, sg: str, soft_reset: bool,
+        dtype: torch.dtype
+    ):
+        super().__init__()
+        self._beta = nn.Parameter(torch.tensor(beta_init).to(dtype))
+        self.one = torch.tensor(1.).to(dtype)
+        self.detach_reset = detach_reset
+        if sg.lower() == "atan":
+            self.sg = surrogate.ATan()
+        else:
+            self.sg = surrogate.ATan()
+        self.soft_reset = soft_reset
+        self.dtype = dtype
+
+    @property
+    def beta(self):
+        return torch.sigmoid(self._beta)
+
+    def forward(self, x_seq: torch.Tensor):
+        v = torch.zeros_like(x_seq[0])
+        s_seq = torch.empty_like(x_seq)
+        for t in range(x_seq.shape[0]):
+            v = self.beta * v + x_seq[t]
+            s = self.sg(v - self.one)
+            if self.soft_reset:
+                if self.detach_reset:
+                    v = v - s.detach()
+                else:
+                    v = v - s
+            else:
+                if self.detach_reset:
+                    v = v * (self.one - s.detach())
+                else:
+                    v = v * (self.one - s)
+            s_seq[t] = s
+        return s_seq
 
 
 @triton.testing.perf_report([
@@ -116,8 +122,8 @@ def bacnmark(T, NCL, neuron_type):
 
     results = 0, 0, 0
     if neuron_type == "torch":
-        f = VanillaLIF(
-            beta=0.5,
+        f = VanillaPLIF(
+            beta_init=0.5,
             detach_reset=DETACH_RESET,
             sg=SG,
             soft_reset=SOFT_RESET,
@@ -127,11 +133,16 @@ def bacnmark(T, NCL, neuron_type):
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
     elif neuron_type == "triton":
-        f = get_lif_autograd_function(
+        f = get_plif_autograd_function(
             detach_reset=DETACH_RESET, sg=SG, soft_reset=SOFT_RESET
         )
+        beta = torch.tensor(0.5, device=DEVICE, dtype=DTYPE, requires_grad=True)
         results = triton.testing.do_bench(
-            lambda: f(x, 0.5).backward(grad_y), quantiles=QUANTILES
+            lambda: f(
+                x,
+                torch.sigmoid(beta).expand(x.shape),
+            ).backward(grad_y),
+            quantiles=QUANTILES
         )
 
     return results

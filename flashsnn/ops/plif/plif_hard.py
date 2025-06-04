@@ -10,7 +10,7 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 @triton.jit
 def _multistep_plif_hard_inference_kernel(
     x_seq_ptr,  # [T, N, C, L]
-    beta_seq_ptr,  # [T, N, C, L], before applying sigmoid
+    beta_seq_ptr,  # [T, N, C, L], after applying sigmoid
     s_seq_ptr,
     T: tl.constexpr,
     NCL,
@@ -42,8 +42,6 @@ def _multistep_plif_hard_inference_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        # fp16 not supported; explicitly cast to fp32!
-        beta = tl.sigmoid(beta.to(tl.float32)).to(dtype)
 
         h = beta*v + x  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
@@ -63,7 +61,7 @@ def _multistep_plif_hard_inference_kernel(
 @triton.jit
 def _multistep_plif_hard_forward_kernel(
     x_seq_ptr,  # [T, N, C, L]
-    beta_seq_ptr,  # [T, N, C, L], before applying sigmoid
+    beta_seq_ptr,  # [T, N, C, L], after applying sigmoid
     s_seq_ptr,
     h_seq_ptr,
     v_seq_ptr,
@@ -97,8 +95,6 @@ def _multistep_plif_hard_forward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        # fp16 not supported; explicitly cast to fp32!
-        beta = tl.sigmoid(beta.to(tl.float32)).to(dtype)
 
         h = beta*v + x  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
@@ -204,8 +200,6 @@ def _multistep_plif_hard_atan_not_detached_backward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        # fp16 not supported; explicitly cast to fp32!
-        beta = tl.sigmoid(beta.to(tl.float32)).to(dtype)
 
         sg = pi * (h-one)
         sg = (one / (one + sg*sg)).to(dtype)
@@ -222,7 +216,6 @@ def _multistep_plif_hard_atan_not_detached_backward_kernel(
         tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
 
         grad_beta = grad_v * v_last
-        grad_beta = grad_beta * beta * (one-beta)
         grad_beta_ptrs = tl.make_block_ptr(
             grad_beta_seq_ptr,
             shape=(T, NCL),
@@ -307,8 +300,6 @@ def _multistep_plif_hard_atan_detached_backward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        # fp16 not supported; explicitly cast to fp32!
-        beta = tl.sigmoid(beta.to(tl.float32)).to(dtype)
 
         sg = pi * (h-one)
         sg = (one / (one + sg*sg)).to(dtype)
@@ -325,7 +316,6 @@ def _multistep_plif_hard_atan_detached_backward_kernel(
         tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
 
         grad_beta = grad_v * v_last
-        grad_beta = grad_beta * beta * (one-beta)
         grad_beta_ptrs = tl.make_block_ptr(
             grad_beta_seq_ptr,
             shape=(T, NCL),
@@ -451,6 +441,7 @@ class MultistepPLIFAtanHardNotDetachedFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(ctx, x_seq: torch.Tensor, beta: torch.Tensor):
+        # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
             s_seq, h_seq, v_seq = multistep_plif_hard_forward(x_seq, beta)
             ctx.save_for_backward(h_seq, v_seq, s_seq, beta)
@@ -475,6 +466,7 @@ class MultistepPLIFAtanHardDetachedFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(ctx, x_seq: torch.Tensor, beta: float):
+        # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
             s_seq, h_seq, v_seq = multistep_plif_hard_forward(x_seq, beta)
             ctx.save_for_backward(h_seq, v_seq, s_seq, beta)

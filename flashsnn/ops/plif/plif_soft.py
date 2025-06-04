@@ -42,8 +42,6 @@ def _multistep_plif_soft_inference_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        # fp16 not supported; explicitly cast to fp32!
-        beta = tl.sigmoid(beta.to(tl.float32)).to(dtype)
 
         h = beta*v + x  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
@@ -97,8 +95,6 @@ def _multistep_plif_soft_forward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        # fp16 not supported; explicitly cast to fp32!
-        beta = tl.sigmoid(beta.to(tl.float32)).to(dtype)
 
         h = beta*v + x  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
@@ -194,8 +190,6 @@ def _multistep_plif_soft_atan_not_detached_backward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        # fp16 not supported; explicitly cast to fp32!
-        beta = tl.sigmoid(beta.to(tl.float32)).to(dtype)
 
         sg = pi * (h-one)
         sg = (one / (one + sg*sg)).to(dtype)
@@ -212,7 +206,6 @@ def _multistep_plif_soft_atan_not_detached_backward_kernel(
         tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
 
         grad_beta = grad_v * v_last
-        grad_beta = grad_beta * beta * (one-beta)
         grad_beta_ptrs = tl.make_block_ptr(
             grad_beta_seq_ptr,
             shape=(T, NCL),
@@ -287,8 +280,6 @@ def _multistep_plif_soft_atan_detached_backward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        # fp16 not supported; explicitly cast to fp32!
-        beta = tl.sigmoid(beta.to(tl.float32)).to(dtype)
 
         sg = pi * (h-one)
         sg = (one / (one + sg*sg)).to(dtype)
@@ -305,7 +296,6 @@ def _multistep_plif_soft_atan_detached_backward_kernel(
         tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
 
         grad_beta = grad_v * v_last
-        grad_beta = grad_beta * beta * (one-beta)
         grad_beta_ptrs = tl.make_block_ptr(
             grad_beta_seq_ptr,
             shape=(T, NCL),
@@ -427,6 +417,7 @@ class MultistepPLIFAtanSoftNotDetachedFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(ctx, x_seq: torch.Tensor, beta: torch.Tensor):
+        # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
             s_seq, h_seq, v_seq = multistep_plif_soft_forward(x_seq, beta)
             ctx.save_for_backward(h_seq, v_seq, beta)
@@ -451,6 +442,7 @@ class MultistepPLIFAtanSoftDetachedFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(ctx, x_seq: torch.Tensor, beta: float):
+        # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
             s_seq, h_seq, v_seq = multistep_plif_soft_forward(x_seq, beta)
             ctx.save_for_backward(h_seq, v_seq, beta)

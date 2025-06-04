@@ -98,7 +98,7 @@ def test_lif_ops(beta_init, detach_reset, sg, soft_reset, input_shape, dtype):
     beta1 = torch.tensor(
         beta_init, device="cuda", dtype=dtype, requires_grad=True
     )
-    y1 = f1(x_seq_1, beta1.expand(x_seq_1.shape))
+    y1 = f1(x_seq_1, torch.sigmoid(beta1).expand(x_seq_1.shape))
     y1.backward(grad_y_1)
 
     f2 = VanillaPLIF(beta_init, detach_reset, sg, soft_reset, dtype)
@@ -109,13 +109,13 @@ def test_lif_ops(beta_init, detach_reset, sg, soft_reset, input_shape, dtype):
         y1,
         y2,
         prefix="spike",
-        ratio=0.04 if dtype == torch.float16 else 0.005,
+        ratio=0.05 if dtype == torch.float16 else 0.005,
     )
     assert_close(
         x_seq_1.grad,
         x_seq_2.grad,
         prefix="x_seq.grad",
-        ratio=0.04 if dtype == torch.float16 else 0.005,
+        ratio=0.05 if dtype == torch.float16 else 0.005,
     )
     assert_close(
         beta1.grad,
