@@ -84,3 +84,12 @@ def get_platform() -> str:
         return 'intel'
     else:
         return device
+
+
+@lru_cache(maxsize=None)
+def get_multiprocessor_count(tensor_idx: int = 0) -> int:
+    info = triton.runtime.driver.active.utils.get_device_properties(tensor_idx)
+    return info['multiprocessor_count']
+
+
+print("Streaming Multiprocessor Count: ", get_multiprocessor_count())

@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import torch
 from torch import autograd
 import triton
@@ -5,15 +7,29 @@ import triton.language as tl
 
 from flashsnn.utils import type_dict, contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
+from flashsnn.utils import get_multiprocessor_count
 
 
+@lru_cache(maxsize=None)
+def _get_block_size(NCL, device_idx):
+    BLOCK_NCL = triton.next_power_of_2(
+        triton.cdiv(NCL, get_multiprocessor_count(device_idx))
+    )
+    BLOCK_NCL = min(64, max(1024, BLOCK_NCL))
+    return BLOCK_NCL
+
+
+@triton.autotune(
+    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
+    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+)
 @triton.jit
 def _multistep_lif_hard_inference_kernel(
     x_seq_ptr,  # [T, N, C, L]
     s_seq_ptr,
     beta,
     T: tl.constexpr,
-    NCL,
+    NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
     dtype: tl.constexpr,
 ):
@@ -50,6 +66,10 @@ def _multistep_lif_hard_inference_kernel(
         tl.store(s_ptrs, s, boundary_check=(1,))
 
 
+@triton.autotune(
+    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
+    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+)
 @triton.jit
 def _multistep_lif_hard_forward_kernel(
     x_seq_ptr,  # [T, N, C, L]
@@ -57,7 +77,7 @@ def _multistep_lif_hard_forward_kernel(
     h_seq_ptr,
     beta,
     T: tl.constexpr,
-    NCL,
+    NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
     dtype: tl.constexpr,
 ):
@@ -103,6 +123,10 @@ def _multistep_lif_hard_forward_kernel(
         tl.store(h_ptrs, h, boundary_check=(1,))
 
 
+@triton.autotune(
+    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
+    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+)
 @triton.jit
 def _multistep_lif_hard_atan_not_detached_backward_kernel(
     grad_s_seq_ptr,
@@ -111,7 +135,7 @@ def _multistep_lif_hard_atan_not_detached_backward_kernel(
     grad_x_seq_ptr,
     beta,
     T: tl.constexpr,
-    NCL,
+    NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
     dtype: tl.constexpr,
 ):
@@ -170,6 +194,10 @@ def _multistep_lif_hard_atan_not_detached_backward_kernel(
         grad_v = grad_v * beta
 
 
+@triton.autotune(
+    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
+    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+)
 @triton.jit
 def _multistep_lif_hard_atan_detached_backward_kernel(
     grad_s_seq_ptr,
@@ -178,7 +206,7 @@ def _multistep_lif_hard_atan_detached_backward_kernel(
     grad_x_seq_ptr,
     beta,
     T: tl.constexpr,
-    NCL,
+    NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
     dtype: tl.constexpr,
 ):
@@ -240,9 +268,9 @@ def _multistep_lif_hard_atan_detached_backward_kernel(
 def multistep_lif_hard_inference(x_seq: torch.Tensor, beta: float):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
+    BLOCK_NCL = _get_block_size(NCL, x_seq.device.index)
     s_seq = torch.empty_like(x_seq)
     dtype = x_seq.dtype
-    BLOCK_NCL = 128
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
     _multistep_lif_hard_inference_kernel[grid](
@@ -260,10 +288,10 @@ def multistep_lif_hard_inference(x_seq: torch.Tensor, beta: float):
 def multistep_lif_hard_forward(x_seq: torch.Tensor, beta: float):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
+    BLOCK_NCL = _get_block_size(NCL, x_seq.device.index)
     s_seq = torch.empty_like(x_seq)
     h_seq = torch.empty_like(x_seq)
     dtype = x_seq.dtype
-    BLOCK_NCL = 128
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
     _multistep_lif_hard_forward_kernel[grid](
@@ -285,9 +313,9 @@ def multistep_lif_hard_atan_not_detached_backward(
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
+    BLOCK_NCL = _get_block_size(NCL, grad_s_seq.device.index)
     grad_x_seq = torch.empty_like(grad_s_seq)
     dtype = grad_s_seq.dtype
-    BLOCK_NCL = 128
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
     _multistep_lif_hard_atan_not_detached_backward_kernel[grid](
@@ -296,9 +324,9 @@ def multistep_lif_hard_atan_not_detached_backward(
         s_seq,
         grad_x_seq,
         beta,
-        T,
-        NCL,
-        BLOCK_NCL,
+        T=T,
+        NCL=NCL,
+        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return grad_x_seq
@@ -310,9 +338,9 @@ def multistep_lif_hard_atan_detached_backward(
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
+    BLOCK_NCL = _get_block_size(NCL, grad_s_seq.device.index)
     grad_x_seq = torch.empty_like(grad_s_seq)
     dtype = grad_s_seq.dtype
-    BLOCK_NCL = 128
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
     _multistep_lif_hard_atan_detached_backward_kernel[grid](
@@ -321,9 +349,9 @@ def multistep_lif_hard_atan_detached_backward(
         s_seq,
         grad_x_seq,
         beta,
-        T,
-        NCL,
-        BLOCK_NCL,
+        T=T,
+        NCL=NCL,
+        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return grad_x_seq
