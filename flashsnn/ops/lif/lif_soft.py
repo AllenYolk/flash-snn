@@ -15,7 +15,7 @@ def _get_block_size(NCL, device_idx):
     BLOCK_NCL = triton.next_power_of_2(
         triton.cdiv(NCL, get_multiprocessor_count(device_idx))
     )
-    BLOCK_NCL = min(64, max(1024, BLOCK_NCL))
+    BLOCK_NCL = min(128, max(1024, BLOCK_NCL))
     return BLOCK_NCL
 
 
