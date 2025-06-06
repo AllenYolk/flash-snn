@@ -6,14 +6,14 @@ sys.path.append("./")
 
 import torch
 import torch.nn as nn
-from spikingjelly.activation_based import surrogate, neuron
+from spikingjelly.activation_based import surrogate
 
 from flashsnn.ops import psn
 from flashsnn.utils import assert_close
 
 SG_LIST = ["atan"]
 INPUT_SHAPE_LIST = [(4, 32, 3, 224, 224), (5, 4, 700)]
-DTYPE_LIST = [torch.float16]
+DTYPE_LIST = [torch.float32]
 
 torch.manual_seed(2025)
 
@@ -49,9 +49,6 @@ class VanillaPSN(nn.Module):
         spike_seq = self.surrogate_function(h_seq)
         return spike_seq.view(x_seq.shape)
 
-    def extra_repr(self):
-        return super().extra_repr() + f'T={self.T}, '
-
 
 @pytest.mark.parametrize("sg", SG_LIST)
 @pytest.mark.parametrize("input_shape", INPUT_SHAPE_LIST)
@@ -65,7 +62,8 @@ def test_lif_ops(sg, input_shape, dtype):
     grad_y_2 = grad_y_1.clone()
 
     f1 = VanillaPSN(T=input_shape[0], dtype=dtype).to("cuda")
-    weight2, bias2 = f1.weight.data.clone(), f1.bias.data.clone()
+    weight2 = f1.weight.data.clone().detach()
+    bias2 = f1.bias.data.clone().detach()
     weight2.requires_grad = True
     bias2.requires_grad = True
     y1 = f1(x_seq_1)
@@ -88,14 +86,14 @@ def test_lif_ops(sg, input_shape, dtype):
         ratio=0.05 if dtype == torch.float16 else 0.005,
     )
     assert_close(
-        f1.weight.grad,
-        weight2.grad,
-        prefix="weight.grad",
-        ratio=0.05 if dtype == torch.float16 else 0.005,
-    )
-    assert_close(
         f1.bias.grad,
         bias2.grad,
         prefix="bias.grad",
+        ratio=0.05 if dtype == torch.float16 else 0.005,
+    )
+    assert_close(
+        f1.weight.grad,
+        weight2.grad,
+        prefix="weight.grad",
         ratio=0.05 if dtype == torch.float16 else 0.005,
     )

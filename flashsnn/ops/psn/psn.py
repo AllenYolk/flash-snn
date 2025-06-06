@@ -64,8 +64,9 @@ def _psn_inference_kernel(
     )
     bias = tl.load(bias_ptrs, boundary_check=(0,), padding_option="zero")
 
-    x_seq = tl.dot(weight, x_seq)
-    h_seq = x_seq - bias
+    h_seq = tl.dot(
+        weight, x_seq, out_dtype=dtype, input_precision="ieee"
+    ) - bias
     s_seq = (h_seq >= 0.).to(dtype)
 
     s_ptrs = tl.make_block_ptr(
@@ -123,8 +124,9 @@ def _psn_forward_kernel(
     )
     bias = tl.load(bias_ptrs, boundary_check=(0,), padding_option="zero")
 
-    x_seq = tl.dot(weight, x_seq)
-    h_seq = x_seq - bias
+    h_seq = tl.dot(
+        weight, x_seq, out_dtype=dtype, input_precision="ieee"
+    ) - bias
     s_seq = (h_seq >= 0.).to(dtype)
 
     s_ptrs = tl.make_block_ptr(
@@ -210,8 +212,12 @@ def _psn_atan_backward_kernel(
     sg = pi * h_seq
     sg = (one / (one + sg*sg)).to(dtype)
     grad_h_seq = grad_s_seq * sg  # [T, NCL]
-    grad_x_seq = tl.dot(tl.trans(weight), grad_h_seq)
-    grad_weight = tl.dot(grad_h_seq, tl.trans(x_seq))
+    grad_x_seq = tl.dot(
+        tl.trans(weight), grad_h_seq, out_dtype=dtype, input_precision="ieee"
+    )
+    grad_weight = tl.dot(
+        grad_h_seq, tl.trans(x_seq), out_dtype=dtype, input_precision="ieee"
+    )
     grad_bias = -tl.sum(grad_h_seq, axis=1, keep_dims=True)
 
     grad_x_seq_ptrs = tl.make_block_ptr(
