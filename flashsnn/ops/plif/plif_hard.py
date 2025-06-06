@@ -15,7 +15,7 @@ def _get_block_size(NCL, device_idx):
     BLOCK_NCL = triton.next_power_of_2(
         triton.cdiv(NCL, get_multiprocessor_count(device_idx))
     )
-    BLOCK_NCL = min(128, max(1024, BLOCK_NCL))
+    BLOCK_NCL = min(1024, max(128, BLOCK_NCL))
     return BLOCK_NCL
 
 
@@ -493,7 +493,7 @@ class MultistepPLIFAtanHardDetachedFunction(autograd.Function):
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_fwd
-    def forward(ctx, x_seq: torch.Tensor, beta: float):
+    def forward(ctx, x_seq: torch.Tensor, beta: torch.Tensor):
         # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
             s_seq, h_seq, v_seq = multistep_plif_hard_forward(x_seq, beta)
