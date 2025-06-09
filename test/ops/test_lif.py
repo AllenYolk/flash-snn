@@ -81,11 +81,11 @@ class VanillaLIF(nn.Module):
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
 def test_lif_ops(beta, detach_reset, sg, soft_reset, input_shape, dtype):
     x_seq_1 = torch.randn(input_shape, device="cuda", dtype=dtype)
-    x_seq_2 = x_seq_1.clone()
+    x_seq_2 = x_seq_1.clone().detach()
     x_seq_1.requires_grad = True
     x_seq_2.requires_grad = True
     grad_y_1 = torch.randn_like(x_seq_1)
-    grad_y_2 = grad_y_1.clone()
+    grad_y_2 = grad_y_1.clone().detach()
 
     f1 = get_lif_autograd_function(detach_reset, sg, soft_reset)
     y1 = f1(x_seq_1, beta)

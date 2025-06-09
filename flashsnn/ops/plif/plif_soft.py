@@ -20,13 +20,17 @@ def _get_block_size(NCL, device_idx):
 
 
 @triton.autotune(
-    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
-    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _multistep_plif_soft_inference_kernel(
-    x_seq_ptr,  # [T, N, C, L]
-    beta_seq_ptr,  # [T, N, C, L], before applying sigmoid
+    x_seq_ptr,  # [T, NCL]
+    beta_seq_ptr,  # [T, NCL], before applying sigmoid
     s_seq_ptr,
     T: tl.constexpr,
     NCL: tl.constexpr,
@@ -75,13 +79,17 @@ def _multistep_plif_soft_inference_kernel(
 
 
 @triton.autotune(
-    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
-    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _multistep_plif_soft_forward_kernel(
-    x_seq_ptr,  # [T, N, C, L]
-    beta_seq_ptr,  # [T, N, C, L], before applying sigmoid
+    x_seq_ptr,  # [T, NCL]
+    beta_seq_ptr,  # [T, NCL], before applying sigmoid
     s_seq_ptr,
     h_seq_ptr,
     v_seq_ptr,
@@ -150,8 +158,12 @@ def _multistep_plif_soft_forward_kernel(
 
 
 @triton.autotune(
-    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
-    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _multistep_plif_soft_atan_not_detached_backward_kernel(
@@ -244,8 +256,12 @@ def _multistep_plif_soft_atan_not_detached_backward_kernel(
 
 
 @triton.autotune(
-    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
-    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _multistep_plif_soft_atan_detached_backward_kernel(

@@ -20,12 +20,16 @@ def _get_block_size(NCL, device_idx):
 
 
 @triton.autotune(
-    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
-    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _multistep_lif_hard_inference_kernel(
-    x_seq_ptr,  # [T, N, C, L]
+    x_seq_ptr,  # [T, NCL]
     s_seq_ptr,
     beta,
     T: tl.constexpr,
@@ -67,12 +71,16 @@ def _multistep_lif_hard_inference_kernel(
 
 
 @triton.autotune(
-    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
-    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _multistep_lif_hard_forward_kernel(
-    x_seq_ptr,  # [T, N, C, L]
+    x_seq_ptr,  # [T, NCL]
     s_seq_ptr,
     h_seq_ptr,
     beta,
@@ -124,8 +132,12 @@ def _multistep_lif_hard_forward_kernel(
 
 
 @triton.autotune(
-    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
-    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _multistep_lif_hard_atan_not_detached_backward_kernel(
@@ -195,8 +207,12 @@ def _multistep_lif_hard_atan_not_detached_backward_kernel(
 
 
 @triton.autotune(
-    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
-    key=["T", "NCL", "BLOCK_NCL", "dtype"],
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _multistep_lif_hard_atan_detached_backward_kernel(

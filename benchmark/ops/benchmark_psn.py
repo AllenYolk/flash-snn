@@ -1,3 +1,4 @@
+import math
 import sys
 
 sys.path.append("./")
@@ -7,74 +8,44 @@ import torch.nn as nn
 import triton
 from spikingjelly.activation_based import surrogate
 
-from flashsnn.ops import plif
+from flashsnn.ops import psn
 
 DEVICE = "cuda"
 DTYPE = torch.float32
 QUANTILES = [0.5, 0.2, 0.8]
-DETACH_RESET = True
 SG = "atan"
-SOFT_RESET = False
 
 
-def get_plif_autograd_function(detach_reset: bool, sg: str, soft_reset: bool):
+def get_psn_autograd_function(sg):
     if sg.lower() == "atan":
         s1 = "Atan"
     else:
         s1 = "Atan"
-
-    if soft_reset:
-        s2 = "Soft"
-    else:
-        s2 = "Hard"
-
-    if detach_reset:
-        s3 = "Detached"
-    else:
-        s3 = "NotDetached"
-
-    return getattr(plif, f"MultistepPLIF{s1}{s2}{s3}Function").apply
+    return getattr(psn, f"PSN{s1}Function").apply
 
 
-class VanillaPLIF(nn.Module):
+class VanillaPSN(nn.Module):
+    """Borrowed from SpikingJelly.
+    """
 
-    def __init__(
-        self, beta_init: float, detach_reset: bool, sg: str, soft_reset: bool,
-        dtype: torch.dtype
-    ):
+    def __init__(self, T: int, dtype):
         super().__init__()
-        self._beta = nn.Parameter(torch.tensor(beta_init).to(dtype))
-        self.one = torch.tensor(1.).to(dtype)
-        self.detach_reset = detach_reset
-        if sg.lower() == "atan":
-            self.sg = surrogate.ATan()
-        else:
-            self.sg = surrogate.ATan()
-        self.soft_reset = soft_reset
-        self.dtype = dtype
+        self.T = T
+        self.surrogate_function = surrogate.ATan()
+        weight = torch.zeros([T, T]).to(dtype)
+        bias = torch.zeros([T, 1]).to(dtype)
 
-    @property
-    def beta(self):
-        return torch.sigmoid(self._beta)
+        self.weight = nn.Parameter(weight)
+        self.bias = nn.Parameter(bias)
+
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        nn.init.constant_(self.bias, 1.)
 
     def forward(self, x_seq: torch.Tensor):
-        v = torch.zeros_like(x_seq[0])
-        s_seq = torch.empty_like(x_seq)
-        for t in range(x_seq.shape[0]):
-            v = self.beta * v + x_seq[t]
-            s = self.sg(v - self.one)
-            if self.soft_reset:
-                if self.detach_reset:
-                    v = v - s.detach()
-                else:
-                    v = v - s
-            else:
-                if self.detach_reset:
-                    v = v * (self.one - s.detach())
-                else:
-                    v = v * (self.one - s)
-            s_seq[t] = s
-        return s_seq
+        # x_seq.shape = [T, N, *]
+        h_seq = torch.addmm(-self.bias, self.weight, x_seq.flatten(1))
+        spike_seq = self.surrogate_function(h_seq)
+        return spike_seq.view(x_seq.shape)
 
 
 @triton.testing.perf_report([
@@ -82,7 +53,7 @@ class VanillaPLIF(nn.Module):
         # argument names to use as an x-axis for the plot
         x_names=['T'],
         # different possible values for `x_name`
-        x_vals=[4 * i for i in range(1, 16)],
+        x_vals=[4 * i for i in range(1, 17)],
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
@@ -122,27 +93,27 @@ def bacnmark(T, NCL, neuron_type):
 
     results = 0, 0, 0
     if neuron_type == "torch":
-        f = VanillaPLIF(
-            beta_init=0.5,
-            detach_reset=DETACH_RESET,
-            sg=SG,
-            soft_reset=SOFT_RESET,
-            dtype=DTYPE
-        )
+        f = VanillaPSN(T, dtype=DTYPE).to(DEVICE)
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
     elif neuron_type == "triton":
-        f = get_plif_autograd_function(
-            detach_reset=DETACH_RESET, sg=SG, soft_reset=SOFT_RESET
-        )
+        f = get_psn_autograd_function(sg=SG)
         beta = torch.tensor(0.5, device=DEVICE, dtype=DTYPE, requires_grad=True)
+        weight = torch.randn(
+            [T, T],
+            device=DEVICE,
+            dtype=DTYPE,
+            requires_grad=True,
+        )
+        bias = torch.randn(
+            [T, 1],
+            device=DEVICE,
+            dtype=DTYPE,
+            requires_grad=True,
+        )
         results = triton.testing.do_bench(
-            lambda: f(
-                x,
-                torch.sigmoid(beta).expand(x.shape),
-            ).backward(grad_y),
-            quantiles=QUANTILES
+            lambda: f(x, weight, bias).backward(grad_y), quantiles=QUANTILES
         )
 
     return results
@@ -150,5 +121,5 @@ def bacnmark(T, NCL, neuron_type):
 
 if __name__ == "__main__":
     bacnmark.run(
-        save_path="./logs/benchmark_plif", print_data=True, show_plots=True
+        save_path="./logs/benchmark_psn", print_data=True, show_plots=True
     )

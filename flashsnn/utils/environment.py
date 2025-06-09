@@ -93,3 +93,12 @@ def get_multiprocessor_count(tensor_idx: int = 0) -> int:
 
 
 print("Streaming Multiprocessor Count: ", get_multiprocessor_count())
+
+
+@lru_cache(maxsize=None)
+def get_max_shared_memory(device):
+    prop = triton.runtime.driver.active.utils.get_device_properties(device)
+    return prop["max_shared_mem"]
+
+
+print("Max Shared Memory: ", get_max_shared_memory(0), " bytes")
