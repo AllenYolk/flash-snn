@@ -16,12 +16,16 @@ QUANTILES = [0.5, 0.2, 0.8]
 SG = "atan"
 
 
-def get_psn_autograd_function(sg):
+def get_psn_function(sg, neuron_type):
     if sg.lower() == "atan":
         s1 = "Atan"
     else:
         s1 = "Atan"
-    return getattr(psn, f"PSN{s1}Function").apply
+    if neuron_type == "triton":
+        s2 = ""
+    elif neuron_type == "torch_jit":
+        s2 = "TorchJIT"
+    return getattr(psn, f"PSN{s1}{s2}Function").apply
 
 
 class VanillaPSN(nn.Module):
@@ -57,9 +61,9 @@ class VanillaPSN(nn.Module):
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=['torch', 'triton', 'torch_jit'],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=['Torch', 'Triton', 'Torch JIT'],
         # line styles
         styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
@@ -75,9 +79,9 @@ class VanillaPSN(nn.Module):
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=['torch', 'triton', "torch_jit"],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=['Torch', 'Triton', "Torch JIT"],
         # line styles
         styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
@@ -92,14 +96,13 @@ def bacnmark(T, NCL, neuron_type):
     x.requires_grad = True
 
     results = 0, 0, 0
-    if neuron_type == "torch":
+    if neuron_type == "torch":  # module-style
         f = VanillaPSN(T, dtype=DTYPE).to(DEVICE)
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
-    elif neuron_type == "triton":
-        f = get_psn_autograd_function(sg=SG)
-        beta = torch.tensor(0.5, device=DEVICE, dtype=DTYPE, requires_grad=True)
+    elif neuron_type in ["triton", "torch_jit"]:  # function-style
+        f = get_psn_function(sg=SG, neuron_type=neuron_type)
         weight = torch.randn(
             [T, T],
             device=DEVICE,

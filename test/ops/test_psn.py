@@ -27,7 +27,7 @@ def get_psn_autograd_function(sg: str, backend):
     if backend == "triton":
         s2 = ""
     else:
-        s2 = "Torch"
+        s2 = "TorchJIT"
     return getattr(psn, f"PSN{s1}{s2}Function").apply
 
 

@@ -172,10 +172,114 @@ def _psn_forward_kernel(
         for w in [2, 4, 8]
         for s in [2, 3, 4]
     ],
+    key=["BLOCK_T", "BLOCK_NCL", "dtype"],
+)
+@triton.jit
+def _psn_atan_backward_kernel_with_atomic(
+    grad_s_seq_ptr,  # [T, NCL]
+    weight_ptr,  # [T, T]
+    h_seq_ptr,
+    x_seq_ptr,
+    grad_x_seq_ptr,  # [T, NCL]
+    grad_weight_ptr,  # [T, T]
+    grad_bias_ptr,  # [T, 1]
+    T: tl.constexpr,
+    NCL: tl.constexpr,
+    BLOCK_T: tl.constexpr,  # >= T
+    BLOCK_NCL: tl.constexpr,
+    dtype: tl.constexpr,
+):
+    pid_ncl = tl.program_id(0)
+    ncl_offset = pid_ncl * BLOCK_NCL
+
+    pi = tl.full([1], 3.141592653589793, dtype=dtype)
+    one = tl.full([1], 1., dtype=dtype)
+
+    grad_s_seq_ptrs = tl.make_block_ptr(
+        grad_s_seq_ptr,
+        shape=(T, NCL),
+        strides=(NCL, 1),
+        offsets=(0, ncl_offset),
+        block_shape=(BLOCK_T, BLOCK_NCL),
+        order=(1, 0)
+    )
+    grad_s_seq = tl.load(
+        grad_s_seq_ptrs, boundary_check=(0, 1), padding_option="zero"
+    )
+    weight_ptrs = tl.make_block_ptr(
+        weight_ptr,
+        shape=(T, T),
+        strides=(T, 1),
+        offsets=(0, 0),
+        block_shape=(BLOCK_T, BLOCK_T),
+        order=(1, 0)
+    )
+    weight = tl.load(weight_ptrs, boundary_check=(0, 1), padding_option="zero")
+    h_ptrs = tl.make_block_ptr(
+        h_seq_ptr,
+        shape=(T, NCL),
+        strides=(NCL, 1),
+        offsets=(0, ncl_offset),
+        block_shape=(BLOCK_T, BLOCK_NCL),
+        order=(1, 0)
+    )
+    h_seq = tl.load(h_ptrs, boundary_check=(0, 1), padding_option="zero")
+    x_ptrs = tl.make_block_ptr(
+        x_seq_ptr,
+        shape=(T, NCL),
+        strides=(NCL, 1),
+        offsets=(0, ncl_offset),
+        block_shape=(BLOCK_T, BLOCK_NCL),
+        order=(1, 0)
+    )
+    x_seq = tl.load(x_ptrs, boundary_check=(0, 1), padding_option="zero")
+
+    sg = pi * h_seq
+    sg = (one / (one + sg*sg)).to(dtype)
+    grad_h_seq = grad_s_seq * sg  # [BLOCK_T, BLOCK_NCL]
+    grad_x_seq = tl.dot(
+        tl.trans(weight), grad_h_seq, out_dtype=dtype, input_precision="ieee"
+    )
+    grad_weight = tl.dot(
+        grad_h_seq, tl.trans(x_seq), out_dtype=dtype, input_precision="ieee"
+    )
+    grad_bias = -tl.sum(grad_h_seq, axis=1, keep_dims=True)
+
+    grad_x_seq_ptrs = tl.make_block_ptr(
+        grad_x_seq_ptr,
+        shape=(T, NCL),
+        strides=(NCL, 1),
+        offsets=(0, ncl_offset),
+        block_shape=(BLOCK_T, BLOCK_NCL),
+        order=(1, 0)
+    )
+    tl.store(
+        grad_x_seq_ptrs,
+        grad_x_seq,
+        boundary_check=(0, 1),
+    )
+
+    # use atomic adds; forced to use pointer blocks, not block pointers
+    ts = tl.arange(0, BLOCK_T)
+    grad_weight_ptrs = grad_weight_ptr + ts[:, None] * T + ts[None, :]
+    mask_weight = ((tl.arange(0, BLOCK_T) < T)[:, None] &
+                   (tl.arange(0, BLOCK_T) < T)[None, :])
+    tl.atomic_add(grad_weight_ptrs, grad_weight, mask=mask_weight)
+    grad_bias_ptrs = grad_bias_ptr + ts[:, None]  # [BLOCK_T, 1]
+    mask_bias = (tl.arange(0, BLOCK_T) < T)[:, None]
+    tl.atomic_add(grad_bias_ptrs, grad_bias, mask=mask_bias)
+
+
+@triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
     key=["BLOCK_T", "BLOCK_NCL", "N_BLOCK_NCL", "dtype"],
 )
 @triton.jit
-def _psn_atan_backward_kernel(
+def _psn_atan_backward_kernel_without_atomic(
     grad_s_seq_ptr,  # [T, NCL]
     weight_ptr,  # [T, T]
     h_seq_ptr,
@@ -190,6 +294,7 @@ def _psn_atan_backward_kernel(
     N_BLOCK_NCL: tl.constexpr,  # N_BLOCK_T = 1
     dtype: tl.constexpr,
 ):
+    """Used when atomic_add is not available."""
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
 
@@ -335,7 +440,7 @@ def psn_forward(x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
     return s_seq, h_seq
 
 
-def psn_atan_backward(
+def psn_atan_backward_with_atomic(
     grad_s_seq: torch.Tensor, weight: torch.Tensor, h_seq: torch.Tensor,
     x_seq: torch.Tensor
 ):
@@ -345,18 +450,56 @@ def psn_atan_backward(
     N_BLOCK_NCL = triton.cdiv(NCL, BLOCK_NCL)
     dtype = grad_s_seq.dtype
     grad_x_seq = torch.empty_like(grad_s_seq)
-    grad_weight = torch.empty(
+    grad_weight = torch.zeros(
         [N_BLOCK_NCL, T, T],
         dtype=dtype,
         device=grad_s_seq.device,
     )
-    grad_bias = torch.empty(
+    grad_bias = torch.zeros(
         [N_BLOCK_NCL, T, 1],
         dtype=dtype,
         device=grad_s_seq.device,
     )  # shape=[T, 1]
 
-    _psn_atan_backward_kernel[(N_BLOCK_NCL,)](
+    _psn_atan_backward_kernel_with_atomic[(N_BLOCK_NCL,)](
+        grad_s_seq,
+        weight,
+        h_seq,
+        x_seq,
+        grad_x_seq,
+        grad_weight,
+        grad_bias,
+        T=T,
+        NCL=NCL,
+        BLOCK_T=BLOCK_T,
+        BLOCK_NCL=BLOCK_NCL,
+        dtype=type_dict[dtype],
+    )
+    return grad_x_seq, grad_weight.sum(dim=0), grad_bias.sum(dim=0)
+
+
+def psn_atan_backward_without_atomic(
+    grad_s_seq: torch.Tensor, weight: torch.Tensor, h_seq: torch.Tensor,
+    x_seq: torch.Tensor
+):
+    T = grad_s_seq.shape[0]
+    NCL = grad_s_seq[0].numel()
+    BLOCK_T, BLOCK_NCL = _get_block_size(T, NCL, grad_s_seq.device.index)
+    N_BLOCK_NCL = triton.cdiv(NCL, BLOCK_NCL)
+    dtype = grad_s_seq.dtype
+    grad_x_seq = torch.empty_like(grad_s_seq)
+    grad_weight = torch.zeros(
+        [N_BLOCK_NCL, T, T],
+        dtype=dtype,
+        device=grad_s_seq.device,
+    )
+    grad_bias = torch.zeros(
+        [N_BLOCK_NCL, T, 1],
+        dtype=dtype,
+        device=grad_s_seq.device,
+    )  # shape=[T, 1]
+
+    _psn_atan_backward_kernel_without_atomic[(N_BLOCK_NCL,)](
         grad_s_seq,
         weight,
         h_seq,
@@ -372,6 +515,16 @@ def psn_atan_backward(
         dtype=type_dict[dtype],
     )
     return grad_x_seq, grad_weight.sum(dim=0), grad_bias.sum(dim=0)
+
+
+if torch.cuda.get_device_capability()[0] < 7:
+    print(
+        "WARNING: CUDA compute capability < 7.0. "
+        f"tl.atomic_add() is not supported."
+    )
+    psn_atan_backward = psn_atan_backward_without_atomic
+else:
+    psn_atan_backward = psn_atan_backward_with_atomic
 
 
 class PSNAtanFunction(autograd.Function):
@@ -400,9 +553,10 @@ class PSNAtanFunction(autograd.Function):
         return grad_x_seq, grad_weight, grad_bias
 
 
-class PSNAtanTorchFunction:
+class PSNAtanTorchJITFunction:
     """"autograd.Function-like interface"""
 
+    @torch.jit.script
     def apply(x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
         h_seq = torch.addmm(-bias, weight, x_seq.flatten(1))
         s_seq = surrogate.atan.apply(h_seq, 2.)
