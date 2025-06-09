@@ -166,14 +166,8 @@ def _psn_forward_kernel(
     tl.store(h_ptrs, h_seq, boundary_check=(0, 1))
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=w, num_stages=s)
-        for w in [2, 4, 8]
-        for s in [2, 3, 4]
-    ],
-    key=["BLOCK_T", "BLOCK_NCL", "dtype"],
-)
+# Autotune should be disabled if atomic_add is used.
+# Otherwise, the shared memory might be written multiple times!
 @triton.jit
 def _psn_atan_backward_kernel_with_atomic(
     grad_s_seq_ptr,  # [T, NCL]
@@ -262,11 +256,10 @@ def _psn_atan_backward_kernel_with_atomic(
     # use atomic adds; forced to use pointer blocks, not block pointers
     ts = tl.arange(0, BLOCK_T)
     grad_weight_ptrs = grad_weight_ptr + ts[:, None] * T + ts[None, :]
-    mask_weight = ((tl.arange(0, BLOCK_T) < T)[:, None] &
-                   (tl.arange(0, BLOCK_T) < T)[None, :])
+    mask_weight = (ts[:, None] < T) & (ts[None, :] < T)
     tl.atomic_add(grad_weight_ptrs, grad_weight, mask=mask_weight)
     grad_bias_ptrs = grad_bias_ptr + ts[:, None]  # [BLOCK_T, 1]
-    mask_bias = (tl.arange(0, BLOCK_T) < T)[:, None]
+    mask_bias = ts[:, None] < T
     tl.atomic_add(grad_bias_ptrs, grad_bias, mask=mask_bias)
 
 
