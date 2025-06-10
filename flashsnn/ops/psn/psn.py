@@ -9,6 +9,7 @@ from spikingjelly.activation_based import surrogate
 from flashsnn.utils import get_multiprocessor_count, type_dict
 from flashsnn.utils import contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
+from flashsnn.utils import get_device_capability
 
 
 @lru_cache(maxsize=None)
@@ -510,11 +511,7 @@ def psn_atan_backward_without_atomic(
     return grad_x_seq, grad_weight.sum(dim=0), grad_bias.sum(dim=0)
 
 
-if torch.cuda.get_device_capability()[0] < 7:
-    print(
-        "WARNING: CUDA compute capability < 7.0. "
-        f"tl.atomic_add() is not supported."
-    )
+if get_device_capability()[0] < 7:
     psn_atan_backward = psn_atan_backward_without_atomic
 else:
     psn_atan_backward = psn_atan_backward_with_atomic

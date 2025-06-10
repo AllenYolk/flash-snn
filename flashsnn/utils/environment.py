@@ -102,3 +102,15 @@ def get_max_shared_memory(device):
 
 
 print("Max Shared Memory: ", get_max_shared_memory(0), " bytes")
+
+
+@lru_cache(maxsize=None)
+def get_device_capability(device=None):
+    return torch.cuda.get_device_capability(device)
+
+
+if get_device_capability()[0] < 7:
+    print(
+        "WARNING: CUDA compute capability < 7.0. "
+        f"tl.atomic_add() is not supported."
+    )
