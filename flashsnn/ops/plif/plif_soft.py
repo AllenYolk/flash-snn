@@ -63,7 +63,7 @@ def _multistep_plif_soft_inference_kernel(
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
 
-        h = beta*v + x  # decay_input = False
+        h = tl.fma(beta, v, x)  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
         v = h - s  # soft_reset, v_th = 1
 
@@ -124,7 +124,7 @@ def _multistep_plif_soft_forward_kernel(
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
 
-        h = beta*v + x  # decay_input = False
+        h = tl.fma(beta, v, x)
         s = (h >= 1.).to(dtype)  # v_th = 1
         v = h - s  # soft_reset, v_th = 1
 
@@ -228,8 +228,8 @@ def _multistep_plif_soft_atan_not_detached_backward_kernel(
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
 
         sg = pi * (h-one)
-        sg = (one / (one + sg*sg)).to(dtype)
-        grad_v = (grad_s-grad_v) * sg + grad_v  # grad_h
+        sg = (one / (tl.fma(sg, sg, one))).to(dtype)
+        grad_v = tl.fma(grad_s - grad_v, sg, grad_v)
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,
@@ -326,8 +326,8 @@ def _multistep_plif_soft_atan_detached_backward_kernel(
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
 
         sg = pi * (h-one)
-        sg = (one / (one + sg*sg)).to(dtype)
-        grad_v = grad_s*sg + grad_v  # grad_h
+        sg = (one / (tl.fma(sg, sg, one))).to(dtype)
+        grad_v = tl.fma(grad_s, sg, grad_v)
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,

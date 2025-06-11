@@ -230,7 +230,7 @@ def _psn_atan_backward_kernel_with_atomic(
     x_seq = tl.load(x_ptrs, boundary_check=(0, 1), padding_option="zero")
 
     sg = pi * h_seq
-    sg = (one / (one + sg*sg)).to(dtype)
+    sg = (one / (tl.fma(sg, sg, one))).to(dtype)
     grad_h_seq = grad_s_seq * sg  # [BLOCK_T, BLOCK_NCL]
     grad_x_seq = tl.dot(
         tl.trans(weight), grad_h_seq, out_dtype=dtype, input_precision="ieee"
@@ -335,7 +335,7 @@ def _psn_atan_backward_kernel_without_atomic(
     x_seq = tl.load(x_ptrs, boundary_check=(0, 1), padding_option="zero")
 
     sg = pi * h_seq
-    sg = (one / (one + sg*sg)).to(dtype)
+    sg = (one / (tl.fma(sg, sg, one))).to(dtype)
     grad_h_seq = grad_s_seq * sg  # [BLOCK_T, BLOCK_NCL]
     grad_x_seq = tl.dot(
         tl.trans(weight), grad_h_seq, out_dtype=dtype, input_precision="ieee"
