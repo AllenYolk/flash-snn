@@ -122,7 +122,7 @@ def bacnmark(T, NCL, neuron_type):
             sg=SG,
             soft_reset=SOFT_RESET,
             dtype=DTYPE
-        )
+        ).to(DEVICE)
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )

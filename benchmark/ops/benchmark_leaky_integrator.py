@@ -5,52 +5,21 @@ sys.path.append("./")
 import torch
 import torch.nn as nn
 import triton
-from spikingjelly.activation_based import surrogate
 
-from flashsnn.ops import plif
+from flashsnn.ops import leaky_integrator
 
 DEVICE = "cuda"
 DTYPE = torch.float32
 QUANTILES = [0.5, 0.2, 0.8]
-DETACH_RESET = True
-SG = "atan"
-SOFT_RESET = False
+BETA = 0.5
 
 
-def get_plif_autograd_function(detach_reset: bool, sg: str, soft_reset: bool):
-    if sg.lower() == "atan":
-        s1 = "Atan"
-    else:
-        s1 = "Atan"
+class VanillaPLI(nn.Module):
 
-    if soft_reset:
-        s2 = "Soft"
-    else:
-        s2 = "Hard"
-
-    if detach_reset:
-        s3 = "Detached"
-    else:
-        s3 = "NotDetached"
-
-    return getattr(plif, f"MultistepPLIF{s1}{s2}{s3}Function").apply
-
-
-class VanillaPLIF(nn.Module):
-
-    def __init__(
-        self, beta_init: float, detach_reset: bool, sg: str, soft_reset: bool,
-        dtype: torch.dtype
-    ):
+    def __init__(self, beta_init: float, dtype: torch.dtype):
         super().__init__()
         self._beta = nn.Parameter(torch.tensor(beta_init).to(dtype))
         self.one = torch.tensor(1.).to(dtype)
-        self.detach_reset = detach_reset
-        if sg.lower() == "atan":
-            self.sg = surrogate.ATan()
-        else:
-            self.sg = surrogate.ATan()
-        self.soft_reset = soft_reset
         self.dtype = dtype
 
     @property
@@ -58,23 +27,43 @@ class VanillaPLIF(nn.Module):
         return torch.sigmoid(self._beta)
 
     def forward(self, x_seq: torch.Tensor):
-        v = torch.zeros_like(x_seq[0])
-        s_seq = torch.empty_like(x_seq)
+        y = torch.zeros_like(x_seq[0])
+        y_seq = torch.empty_like(x_seq)
         for t in range(x_seq.shape[0]):
-            v = self.beta * v + x_seq[t]
-            s = self.sg(v - self.one)
-            if self.soft_reset:
-                if self.detach_reset:
-                    v = v - s.detach()
-                else:
-                    v = v - s
-            else:
-                if self.detach_reset:
-                    v = v * (self.one - s.detach())
-                else:
-                    v = v * (self.one - s)
-            s_seq[t] = s
-        return s_seq
+            y = self.beta * y + x_seq[t]
+            y_seq[t] = y
+        return y_seq
+
+
+class ParallelPLI(nn.Module):
+
+    def __init__(self, beta_init: float, dtype: torch.dtype):
+        super().__init__()
+        self._beta = nn.Parameter(torch.tensor(beta_init).to(dtype))
+        self.one = torch.tensor(1.).to(dtype)
+        self.dtype = dtype
+
+    @property
+    def beta(self):
+        return torch.sigmoid(self._beta)
+
+    def get_beta_gemm_weight(self, T: int) -> torch.Tensor:
+        beta_gemm = torch.zeros([T, T], device=self._beta.device)
+        # lower triangle: exponential
+        for i in range(T):
+            for j in range(i + 1):
+                beta_gemm[i, j] = self.beta**(i - j)
+        return beta_gemm
+
+    def forward(self, x_seq: torch.Tensor):
+        T = x_seq.shape[0]
+        beta_gemm = self.get_beta_gemm_weight(T)
+        y_seq = torch.addmm(
+            torch.tensor(0., device=x_seq.device, dtype=x_seq.dtype),
+            beta_gemm,
+            x_seq.flatten(1),
+        ).view(x_seq.shape)
+        return y_seq
 
 
 @triton.testing.perf_report([
@@ -82,13 +71,13 @@ class VanillaPLIF(nn.Module):
         # argument names to use as an x-axis for the plot
         x_names=['T'],
         # different possible values for `x_name`
-        x_vals=[4 * i for i in range(1, 16)],
+        x_vals=[4 * i for i in range(1, 17)],
         # argument name whose value corresponds to a different line in the plot
-        line_arg='neuron_type',
+        line_arg='implementation',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=['torch', 'torch_parallel', 'triton'],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=['Torch', 'Torch (parallel)', 'Triton'],
         # line styles
         styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
@@ -102,11 +91,11 @@ class VanillaPLIF(nn.Module):
         # different possible values for `x_name`
         x_vals=[128 * i for i in range(1, 51)],
         # argument name whose value corresponds to a different line in the plot
-        line_arg='neuron_type',
+        line_arg='implementation',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=['torch', 'torch_parallel', 'triton'],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=['Torch', 'Torch (parallel)', 'Triton'],
         # line styles
         styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
@@ -115,28 +104,27 @@ class VanillaPLIF(nn.Module):
         args={"T": 4},
     ),
 ])
-def bacnmark(T, NCL, neuron_type):
+def bacnmark(T, NCL, implementation):
     x = torch.randn([T, NCL], device=DEVICE, dtype=DTYPE)
     grad_y = torch.randn_like(x)
     x.requires_grad = True
 
     results = 0, 0, 0
-    if neuron_type == "torch":
-        f = VanillaPLIF(
-            beta_init=0.5,
-            detach_reset=DETACH_RESET,
-            sg=SG,
-            soft_reset=SOFT_RESET,
-            dtype=DTYPE
-        ).to(DEVICE)
+    if implementation == "torch":
+        f = VanillaPLI(beta_init=BETA, dtype=DTYPE).to(DEVICE)
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
-    elif neuron_type == "triton":
-        f = get_plif_autograd_function(
-            detach_reset=DETACH_RESET, sg=SG, soft_reset=SOFT_RESET
+    elif implementation == "torch_parallel":
+        f = ParallelPLI(beta_init=BETA, dtype=DTYPE).to(DEVICE)
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
-        beta = torch.tensor(0.5, device=DEVICE, dtype=DTYPE, requires_grad=True)
+    elif implementation == "triton":
+        f = leaky_integrator.MultistepPLIIterativeFunction.apply
+        beta = torch.tensor(
+            BETA, device=DEVICE, dtype=DTYPE, requires_grad=True
+        )
         results = triton.testing.do_bench(
             lambda: f(
                 x,
@@ -150,5 +138,7 @@ def bacnmark(T, NCL, neuron_type):
 
 if __name__ == "__main__":
     bacnmark.run(
-        save_path="./logs/benchmark_plif", print_data=True, show_plots=True
+        save_path="./logs/benchmark_leaky_integrator",
+        print_data=True,
+        show_plots=True
     )

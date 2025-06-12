@@ -101,7 +101,7 @@ def test_lif_ops(beta_init, detach_reset, sg, soft_reset, input_shape, dtype):
     y1 = f1(x_seq_1, torch.sigmoid(beta1).expand(x_seq_1.shape))
     y1.backward(grad_y_1)
 
-    f2 = VanillaPLIF(beta_init, detach_reset, sg, soft_reset, dtype)
+    f2 = VanillaPLIF(beta_init, detach_reset, sg, soft_reset, dtype).to("cuda")
     y2 = f2(x_seq_2)
     y2.backward(grad_y_2)
 

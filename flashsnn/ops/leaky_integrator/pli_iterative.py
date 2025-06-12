@@ -41,7 +41,6 @@ def _multistep_pli_forward_iterative_kernel(
     ncl_offset = pid_ncl * BLOCK_NCL
 
     y = tl.zeros([BLOCK_NCL], dtype=dtype)
-    beta = tl.full([1], beta, dtype=dtype)
 
     for t in tl.static_range(0, T, 1):
         x_ptrs = tl.make_block_ptr(
@@ -100,7 +99,6 @@ def _multistep_pli_backward_iterative_kernel(
     ncl_offset = pid_ncl * BLOCK_NCL
 
     dy = tl.zeros([BLOCK_NCL], dtype=dtype)
-    beta = tl.full([1], beta, dtype=dtype)
 
     for t in tl.static_range(T - 1, -1, -1):
         grad_y_ptrs = tl.make_block_ptr(
@@ -208,7 +206,8 @@ class MultistepPLIIterativeFunction(autograd.Function):
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_fwd
-    def forward(ctx, x_seq: torch.Tensor, beta: float):
+    def forward(ctx, x_seq: torch.Tensor, beta: torch.Tensor):
+        """beta.shape=[T, NCL]; after applying sigmoid"""
         y_seq = multistep_pli_forward_iterative(x_seq, beta)
         if any(ctx.needs_input_grad):
             ctx.save_for_backward(y_seq, beta)
