@@ -6,7 +6,7 @@ sys.path.append("./")
 import torch
 import torch.nn as nn
 import triton
-from spikingjelly.activation_based import surrogate
+from spikingjelly.activation_based import surrogate, neuron, functional
 
 from flashsnn.ops import psn
 
@@ -52,20 +52,31 @@ class VanillaPSN(nn.Module):
         return spike_seq.view(x_seq.shape)
 
 
+class SJPSN(neuron.PSN):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, x):
+        y = super().forward(x)
+        functional.reset_net(self)
+        return y
+
+
 @triton.testing.perf_report([
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['T'],
         # different possible values for `x_name`
-        x_vals=[4 * i for i in range(1, 17)],
+        x_vals=[4 * i for i in range(1, 5)],
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton', 'torch_jit'],
+        line_vals=['torch', 'spikingjelly', 'triton'],
         # label name for the lines
-        line_names=['Torch', 'Triton', 'Torch JIT'],
+        line_names=['Torch', 'SpikingJelly', 'Triton'],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
+        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (NCL=8*700)",
@@ -79,11 +90,11 @@ class VanillaPSN(nn.Module):
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton', "torch_jit"],
+        line_vals=['torch', "spikingjelly", 'triton'],
         # label name for the lines
-        line_names=['Torch', 'Triton', "Torch JIT"],
+        line_names=['Torch', 'SpikingJelly', 'Triton'],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
+        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (T=4)",
@@ -117,6 +128,11 @@ def bacnmark(T, NCL, neuron_type):
         )
         results = triton.testing.do_bench(
             lambda: f(x, weight, bias).backward(grad_y), quantiles=QUANTILES
+        )
+    elif neuron_type == "spikingjelly":
+        f = SJPSN(T=T, surrogate_function=surrogate.ATan()).to(DEVICE)
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
 
     return results

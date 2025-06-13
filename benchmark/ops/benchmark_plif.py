@@ -5,7 +5,7 @@ sys.path.append("./")
 import torch
 import torch.nn as nn
 import triton
-from spikingjelly.activation_based import surrogate
+from spikingjelly.activation_based import surrogate, functional, neuron
 
 from flashsnn.ops import plif
 
@@ -77,20 +77,35 @@ class VanillaPLIF(nn.Module):
         return s_seq
 
 
+class SJPLIF(neuron.ParametricLIFNode):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, x):
+        y = super().forward(x)
+        functional.reset_net(self)
+        return y
+
+
 @triton.testing.perf_report([
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['T'],
         # different possible values for `x_name`
-        x_vals=[4 * i for i in range(1, 16)],
+        x_vals=[4 * i for i in range(1, 9)],
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=[
+            'torch', 'spikingjelly-cupy', 'spikingjelly-torch', 'triton'
+        ],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=[
+            'Torch', 'SpikingJelly (CuPy)', 'SpikingJelly (Torch)', 'Triton'
+        ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
+        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (NCL=8*700)",
@@ -104,11 +119,15 @@ class VanillaPLIF(nn.Module):
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=[
+            'torch', "spikingjelly-cupy", 'spikingjelly-torch', 'triton'
+        ],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=[
+            'Torch', 'SpikingJelly (CuPy)', 'SpikingJelly (Torch)', 'Triton'
+        ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
+        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (T=4)",
@@ -143,6 +162,30 @@ def bacnmark(T, NCL, neuron_type):
                 torch.sigmoid(beta).expand(x.shape),
             ).backward(grad_y),
             quantiles=QUANTILES
+        )
+    elif neuron_type == "spikingjelly-cupy":
+        f = SJPLIF(
+            init_tau=2.,
+            decay_input=False,
+            surrogate_function=surrogate.ATan(),
+            detach_reset=DETACH_RESET,
+            step_mode="m",
+            backend="cupy"
+        ).to(DEVICE)
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
+        )
+    elif neuron_type == "spikingjelly-torch":
+        f = SJPLIF(
+            init_tau=2.,
+            decay_input=False,
+            surrogate_function=surrogate.ATan(),
+            detach_reset=DETACH_RESET,
+            step_mode="m",
+            backend="torch"
+        ).to(DEVICE)
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
 
     return results
