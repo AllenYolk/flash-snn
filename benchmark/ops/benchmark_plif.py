@@ -13,16 +13,10 @@ DEVICE = "cuda"
 DTYPE = torch.float32
 QUANTILES = [0.5, 0.2, 0.8]
 DETACH_RESET = True
-SG = "atan"
 SOFT_RESET = False
 
 
-def get_plif_autograd_function(detach_reset: bool, sg: str, soft_reset: bool):
-    if sg.lower() == "atan":
-        s1 = "Atan"
-    else:
-        s1 = "Atan"
-
+def get_plif_autograd_function(detach_reset: bool, soft_reset: bool):
     if soft_reset:
         s2 = "Soft"
     else:
@@ -33,23 +27,20 @@ def get_plif_autograd_function(detach_reset: bool, sg: str, soft_reset: bool):
     else:
         s3 = "NotDetached"
 
-    return getattr(plif, f"MultistepPLIF{s1}{s2}{s3}Function").apply
+    return getattr(plif, f"MultistepPLIF{s2}{s3}Function").apply
 
 
 class VanillaPLIF(nn.Module):
 
     def __init__(
-        self, beta_init: float, detach_reset: bool, sg: str, soft_reset: bool,
+        self, beta_init: float, detach_reset: bool, soft_reset: bool,
         dtype: torch.dtype
     ):
         super().__init__()
         self._beta = nn.Parameter(torch.tensor(beta_init).to(dtype))
         self.one = torch.tensor(1.).to(dtype)
         self.detach_reset = detach_reset
-        if sg.lower() == "atan":
-            self.sg = surrogate.ATan()
-        else:
-            self.sg = surrogate.ATan()
+        self.sg = surrogate.ATan()
         self.soft_reset = soft_reset
         self.dtype = dtype
 
@@ -144,7 +135,6 @@ def bacnmark(T, NCL, neuron_type):
         f = VanillaPLIF(
             beta_init=0.5,
             detach_reset=DETACH_RESET,
-            sg=SG,
             soft_reset=SOFT_RESET,
             dtype=DTYPE
         ).to(DEVICE)
@@ -153,7 +143,7 @@ def bacnmark(T, NCL, neuron_type):
         )
     elif neuron_type == "triton":
         f = get_plif_autograd_function(
-            detach_reset=DETACH_RESET, sg=SG, soft_reset=SOFT_RESET
+            detach_reset=DETACH_RESET, soft_reset=SOFT_RESET
         )
         beta = torch.tensor(0.5, device=DEVICE, dtype=DTYPE, requires_grad=True)
         results = triton.testing.do_bench(

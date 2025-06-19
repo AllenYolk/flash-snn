@@ -11,7 +11,6 @@ from spikingjelly.activation_based import surrogate
 from flashsnn.ops import psn
 from flashsnn.utils import assert_close
 
-SG_LIST = ["atan"]
 BACKEND_LIST = ["triton", "torch"]
 INPUT_SHAPE_LIST = [(4, 32, 3, 224, 224), (5, 4, 700)]
 DTYPE_LIST = [torch.float32, torch.float16]
@@ -19,16 +18,12 @@ DTYPE_LIST = [torch.float32, torch.float16]
 torch.manual_seed(2025)
 
 
-def get_psn_autograd_function(sg: str, backend):
-    if sg.lower() == "atan":
-        s1 = "Atan"
-    else:
-        s1 = "Atan"
+def get_psn_autograd_function(backend):
     if backend == "triton":
         s2 = ""
     else:
         s2 = "TorchJIT"
-    return getattr(psn, f"PSN{s1}{s2}Function").apply
+    return getattr(psn, f"PSN{s2}Function").apply
 
 
 class VanillaPSN(nn.Module):
@@ -55,11 +50,10 @@ class VanillaPSN(nn.Module):
         return spike_seq.view(x_seq.shape)
 
 
-@pytest.mark.parametrize("sg", SG_LIST)
 @pytest.mark.parametrize("input_shape", INPUT_SHAPE_LIST)
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
 @pytest.mark.parametrize("backend", BACKEND_LIST)
-def test_lif_ops(sg, input_shape, dtype, backend):
+def test_lif_ops(input_shape, dtype, backend):
     x_seq_1 = torch.randn(input_shape, device="cuda", dtype=dtype)
     x_seq_2 = x_seq_1.clone().detach()
     x_seq_1.requires_grad = True
@@ -75,7 +69,7 @@ def test_lif_ops(sg, input_shape, dtype, backend):
     y1 = f1(x_seq_1)
     y1.backward(grad_y_1)
 
-    f2 = get_psn_autograd_function(sg, backend)
+    f2 = get_psn_autograd_function(backend)
     y2 = f2(x_seq_2, weight2, bias2)
     y2.backward(grad_y_2)
 

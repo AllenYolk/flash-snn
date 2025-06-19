@@ -13,19 +13,14 @@ from flashsnn.ops import psn
 DEVICE = "cuda"
 DTYPE = torch.float32
 QUANTILES = [0.5, 0.2, 0.8]
-SG = "atan"
 
 
-def get_psn_function(sg, neuron_type):
-    if sg.lower() == "atan":
-        s1 = "Atan"
-    else:
-        s1 = "Atan"
+def get_psn_function(neuron_type):
     if neuron_type == "triton":
         s2 = ""
     elif neuron_type == "torch_jit":
         s2 = "TorchJIT"
-    return getattr(psn, f"PSN{s1}{s2}Function").apply
+    return getattr(psn, f"PSN{s2}Function").apply
 
 
 class VanillaPSN(nn.Module):
@@ -113,7 +108,7 @@ def bacnmark(T, NCL, neuron_type):
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
     elif neuron_type in ["triton", "torch_jit"]:  # function-style
-        f = get_psn_function(sg=SG, neuron_type=neuron_type)
+        f = get_psn_function(neuron_type=neuron_type)
         weight = torch.randn(
             [T, T],
             device=DEVICE,
