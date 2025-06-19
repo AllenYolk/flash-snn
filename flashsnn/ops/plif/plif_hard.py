@@ -6,7 +6,7 @@ from torch import autograd
 import triton
 import triton.language as tl
 
-from flashsnn.ops import surrogate as triton_surrogate
+from flashsnn.ops import surrogate_kernels
 from flashsnn.utils import type_dict, contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 from flashsnn.utils import get_multiprocessor_count
@@ -494,7 +494,7 @@ class MultistepPLIFHardNotDetachedFunction(autograd.Function):
         ctx,
         x_seq: torch.Tensor,
         beta: torch.Tensor,
-        sg_fn: Callable = triton_surrogate.atan_surrogate_backward
+        sg_fn: Callable = surrogate_kernels.atan_surrogate_backward
     ):
         # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
@@ -525,7 +525,7 @@ class MultistepPLIFHardDetachedFunction(autograd.Function):
         ctx,
         x_seq: torch.Tensor,
         beta: torch.Tensor,
-        sg_fn: Callable = triton_surrogate.atan_surrogate_backward
+        sg_fn: Callable = surrogate_kernels.atan_surrogate_backward
     ):
         # beta: after applying sigmoid
         if any(ctx.needs_input_grad):

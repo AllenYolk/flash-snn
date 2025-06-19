@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 from spikingjelly.activation_based import surrogate
 
-from flashsnn.ops import surrogate as triton_surrogate
+from flashsnn.ops import surrogate_kernels
 from flashsnn.utils import get_multiprocessor_count, type_dict
 from flashsnn.utils import contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
@@ -531,7 +531,7 @@ class PSNFunction(autograd.Function):
         x_seq: torch.Tensor,
         weight: torch.Tensor,
         bias: torch.Tensor,
-        sg_fn: Callable = triton_surrogate.atan_surrogate_backward
+        sg_fn: Callable = surrogate_kernels.atan_surrogate_backward
     ):
         if any(ctx.needs_input_grad):
             s_seq, h_seq = psn_forward(x_seq, weight, bias)

@@ -6,7 +6,7 @@ from torch import autograd
 import triton
 import triton.language as tl
 
-from flashsnn.ops import surrogate as triton_surrogate
+from flashsnn.ops import surrogate_kernels
 from flashsnn.utils import type_dict, contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 from flashsnn.utils import get_multiprocessor_count
@@ -468,7 +468,7 @@ class MultistepPLIFSoftNotDetachedFunction(autograd.Function):
         ctx,
         x_seq: torch.Tensor,
         beta: torch.Tensor,
-        sg_fn: Callable = triton_surrogate.atan_surrogate_backward
+        sg_fn: Callable = surrogate_kernels.atan_surrogate_backward
     ):
         # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
@@ -500,7 +500,7 @@ class MultistepPLIFSoftDetachedFunction(autograd.Function):
         if any(ctx.needs_input_grad):
             s_seq, h_seq, v_seq = multistep_plif_soft_forward(x_seq, beta)
             ctx.save_for_backward(h_seq, v_seq, beta)
-            ctx.sg_fn = triton_surrogate.atan_surrogate_backward
+            ctx.sg_fn = surrogate_kernels.atan_surrogate_backward
         else:
             s_seq = multistep_plif_soft_inference(x_seq, beta)
         return s_seq
