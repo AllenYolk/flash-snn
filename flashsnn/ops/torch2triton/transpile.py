@@ -8,13 +8,10 @@ import torch.fx as fx
 import triton
 import triton.language as tl
 
-import sys
-
-sys.path.append("./")
 from flashsnn.utils.dtype import type_str_dict
 
 
-def _unwrap(arg: fx.Node) -> str:
+def _uw(arg) -> str:  # unwrap
     if isinstance(arg, fx.Node):
         return arg.name
     elif isinstance(arg, torch.dtype):
@@ -22,29 +19,57 @@ def _unwrap(arg: fx.Node) -> str:
     return str(arg)
 
 
+PI = 3.14159265358979
+
 FX_TO_TRITON = {
-    'add': lambda node: f"{_unwrap(node.args[0])} + {_unwrap(node.args[1])}",
-    'sub': lambda node: f"{_unwrap(node.args[0])} - {_unwrap(node.args[1])}",
-    'mul': lambda node: f"{_unwrap(node.args[0])} * {_unwrap(node.args[1])}",
-    'ge': lambda node: f"{_unwrap(node.args[0])} >= {_unwrap(node.args[1])}",
-    'to': lambda node: f"{_unwrap(node.args[0])}.to({_unwrap(node.args[1])})",
-    'sigmoid': lambda node: f"tl.sigmoid({_unwrap(node.args[0])})",
+    # forward
+    "add":
+        lambda node: f"{_uw(node.args[0])} + {_uw(node.args[1])}",
+    "sub":
+        lambda node: f"{_uw(node.args[0])} - {_uw(node.args[1])}",
+    "mul":
+        lambda node: f"{_uw(node.args[0])} * {_uw(node.args[1])}",
+    "ge":
+        lambda node: f"{_uw(node.args[0])} >= {_uw(node.args[1])}",
+    "to":
+        lambda node: f"{_uw(node.args[0])}.to({_uw(node.args[1])})",
+    "sigmoid":
+        lambda node: f"tl.sigmoid({_uw(node.args[0])})",
+    # backward
+    "p_add_1":
+        lambda node: f"{_uw(node.args[0])}",
+    "p_add_2":
+        lambda node: f"{_uw(node.args[0])}",
+    "p_sub_1":
+        lambda node: f"{_uw(node.args[0])}",
+    "p_sub_2":
+        lambda node: f"-{_uw(node.args[0])}",
+    "p_mul_1":
+        lambda node: f"{_uw(node.args[0])} * {_uw(node.args[1])}",
+    "p_mul_2":
+        lambda node: f"{_uw(node.args[0])} * {_uw(node.args[1])}",
+    "p_sigmoid":
+        lambda node: (
+            f"{_uw(node.args[0])} * {_uw(node.args[1])} * (1 - {_uw(node.args[1])})"
+        ),
+    "p_to":
+        lambda node: f"{_uw(node.args[0])}.to({_uw(node.args[1])})",
 }
 
-INDENTATIon = "    "
+INDENTATION = "    "
 
 
 def generate_triton_code_str(
-    fn: Callable,
+    graph: fx.Graph,
+    fn_name: str,
     verbose: bool = False,
 ) -> Tuple[str, str]:
-    traced = fx.symbolic_trace(fn)
     if verbose:
-        print(traced.graph)
+        print(graph)
 
     inputs = []
     triton_code_lines = []
-    for node in traced.graph.nodes:
+    for node in graph.nodes:
         if node.op == "placeholder":
             inputs.append(node.name)
         elif node.op == "call_function":
@@ -62,6 +87,11 @@ def generate_triton_code_str(
             if op_name in FX_TO_TRITON:
                 rhs = FX_TO_TRITON[op_name](node)
                 triton_code_lines.append(f"{node.name} = {rhs}")
+            else:
+                raise NotImplementedError(
+                    f"call_method {op_name} has not yet been implemented "
+                    f"in FX_TO_TRITON mapping."
+                )
         elif node.op == "output":
             if isinstance(node.args[0], fx.Node):
                 # only one return value
@@ -75,12 +105,12 @@ def generate_triton_code_str(
             )
 
     prefix = "import triton\nimport triton.language as tl"
-    signiture = ", ".join(inputs)
-    signiture = f"@triton.jit\ndef {fn.__name__}({signiture}):"
-    triton_code_lines = f"\n{INDENTATIon}".join(triton_code_lines)
+    signature = ", ".join(inputs)
+    signature = f"@triton.jit\ndef {fn_name}({signature}):"
+    triton_code_lines = f"\n{INDENTATION}".join(triton_code_lines)
     return (
-        f"{prefix}\n\n{signiture}\n{INDENTATIon}{triton_code_lines}",
-        fn.__name__,
+        f"{prefix}\n\n{signature}\n{INDENTATION}{triton_code_lines}",
+        fn_name,
     )
 
 
@@ -90,7 +120,7 @@ def compile_triton_code_str(
     verbose: bool = False
 ) -> triton.JITFunction:
     # create a temporary file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(triton_code)
         fpath = Path(f.name)
         if verbose:
@@ -98,11 +128,11 @@ def compile_triton_code_str(
 
     try:
         name_space = {
-            'triton': triton,
-            'tl': tl,
+            "triton": triton,
+            "tl": tl,
         }
-        with open(fpath, 'r') as f:
-            code = compile(f.read(), fpath, 'exec')
+        with open(fpath, "r") as f:
+            code = compile(f.read(), fpath, "exec")
             exec(code, name_space)
 
         if kernel_name in name_space:
@@ -112,7 +142,8 @@ def compile_triton_code_str(
                 f"Function {kernel_name} not found in compiled namespace"
             )
     finally:
-        # always remove the temporary file!
+        # if the temporary file is removed,
+        # triton will raise "source code not found" error
         # os.remove(fpath)
         pass
 
@@ -133,7 +164,10 @@ def transpile_triton_code(
     Returns:
         triton.JITFunction
     """
-    kernel_str, kernel_name = generate_triton_code_str(fn, verbose)
+    traced = fx.symbolic_trace(fn)
+    kernel_str, kernel_name = generate_triton_code_str(
+        traced.graph, fn.__name__, verbose
+    )
     if verbose:
         print("=" * 100)
         print("Generated Triton code:\n```")

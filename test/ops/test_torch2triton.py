@@ -63,9 +63,9 @@ def test_sigmoid_sg_torch2triton(shape, dtype):
     assert_close(sg1, sg2, prefix="sg_sigmoid")
 
 
-def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor, dtype):
+def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor):
     h = v*beta + x
-    s = (h >= 1.).to(dtype)
+    s = torch2triton.spike_fn(h, 1.)
     v = h * (1.-s)
     return s, v
 
@@ -99,7 +99,7 @@ def _multistep_lif_high_level_inference_kernel(
         )
         x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
 
-        s, v = op(x, v, beta, dtype)
+        s, v = op(x, v, beta)
 
         s_ptrs = tl.make_block_ptr(
             s_seq_ptr,
@@ -145,3 +145,11 @@ def test_lif_torch2triton(shape, dtype, beta):
     core = torch2triton.transpile_triton_code(lif_core, verbose=True)
     s2 = multistep_lif_high_level_inference_kernel_wrapper(x, beta, core)
     assert_close(s1, s2, prefix="lif_spike")
+
+
+if __name__ == "__main__":
+
+    def t(x):
+        return torch2triton.spike_fn(x, 1.)
+
+    print(torch.fx.symbolic_trace(t).graph)
