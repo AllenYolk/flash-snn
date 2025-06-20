@@ -1,17 +1,12 @@
 from typing import Tuple, Callable
 
 import torch
+import torch.nn as nn
 import torch.fx as fx
 import triton
 
 from flashsnn.ops.torch2triton.transpile import generate_triton_code_str
 from flashsnn.ops.torch2triton.transpile import compile_triton_code_str
-
-
-@torch.fx.wrap
-def spike_fn(h: torch.Tensor, vth):
-    return (h >= vth).to(h.dtype)
-
 
 # key: forward operator name
 # value: Callable node -> tuple
@@ -44,6 +39,10 @@ BACKWARD_RULES = {
         lambda node: (
             ("p_to", [node.args[0].name + "_dtype"]),  # dx = dz.to(x.dtype)
             ("0", []),
+        ),
+    'spike_fn':
+        lambda node: (
+            ("p_spike_fn", [node.args[0].name]),  # dx = dz * spike_fn(x)
         ),
 }
 
@@ -119,6 +118,7 @@ def generate_backward_fx_graph(
             grad_node = backward_graph.create_node(
                 op="call_method",
                 target=grad_op,
+                # grad_output, plus required saved results
                 args=(dz, *grad_args_in_backward_graph),
                 name=f"grad_{arg.name}"
             )

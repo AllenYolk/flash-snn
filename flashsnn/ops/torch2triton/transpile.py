@@ -24,36 +24,42 @@ PI = 3.14159265358979
 FX_TO_TRITON = {
     # forward
     "add":
-        lambda node: f"{_uw(node.args[0])} + {_uw(node.args[1])}",
+        lambda args: f"{_uw(args[0])} + {_uw(args[1])}",
     "sub":
-        lambda node: f"{_uw(node.args[0])} - {_uw(node.args[1])}",
+        lambda args: f"{_uw(args[0])} - {_uw(args[1])}",
     "mul":
-        lambda node: f"{_uw(node.args[0])} * {_uw(node.args[1])}",
+        lambda args: f"{_uw(args[0])} * {_uw(args[1])}",
     "ge":
-        lambda node: f"{_uw(node.args[0])} >= {_uw(node.args[1])}",
+        lambda args: f"{_uw(args[0])} >= {_uw(args[1])}",
     "to":
-        lambda node: f"{_uw(node.args[0])}.to({_uw(node.args[1])})",
+        lambda args: f"{_uw(args[0])}.to({_uw(args[1])})",
     "sigmoid":
-        lambda node: f"tl.sigmoid({_uw(node.args[0])})",
+        lambda args: f"tl.sigmoid({_uw(args[0])})",
+    "spike_fn":
+        lambda args: f"({_uw(args[0])} >= 0.).to({_uw(args[0])}.dtype)",
     # backward
     "p_add_1":
-        lambda node: f"{_uw(node.args[0])}",
+        lambda args: f"{_uw(args[0])}",
     "p_add_2":
-        lambda node: f"{_uw(node.args[0])}",
+        lambda args: f"{_uw(args[0])}",
     "p_sub_1":
-        lambda node: f"{_uw(node.args[0])}",
+        lambda args: f"{_uw(args[0])}",
     "p_sub_2":
-        lambda node: f"-{_uw(node.args[0])}",
+        lambda args: f"-{_uw(args[0])}",
     "p_mul_1":
-        lambda node: f"{_uw(node.args[0])} * {_uw(node.args[1])}",
+        lambda args: f"{_uw(args[0])} * {_uw(args[1])}",
     "p_mul_2":
-        lambda node: f"{_uw(node.args[0])} * {_uw(node.args[1])}",
+        lambda args: f"{_uw(args[0])} * {_uw(args[1])}",
     "p_sigmoid":
-        lambda node: (
-            f"{_uw(node.args[0])} * {_uw(node.args[1])} * (1 - {_uw(node.args[1])})"
-        ),
+        lambda args:
+        (f"{_uw(args[0])} * {_uw(args[1])} * (1 - {_uw(args[1])})"),
     "p_to":
-        lambda node: f"{_uw(node.args[0])}.to({_uw(node.args[1])})",
+        lambda args: f"{_uw(args[0])}.to({_uw(args[1])})",
+    "p_spike_fn":
+        lambda args: (
+            f"(1. / tl.fma({PI}*{_uw(args[0])}, {PI}*{_uw(args[0])}, 1.))"
+            f".to({_uw(args[0])}.dtype)"
+        ),
 }
 
 INDENTATION = "    "
@@ -72,24 +78,17 @@ def generate_triton_code_str(
     for node in graph.nodes:
         if node.op == "placeholder":
             inputs.append(node.name)
-        elif node.op == "call_function":
-            op_name = node.target.__name__
+        elif node.op in ["call_function", "call_method"]:
+            op_name = (
+                node.target.__name__
+                if node.op == "call_function" else node.target
+            )
             if op_name in FX_TO_TRITON:
-                rhs = FX_TO_TRITON[op_name](node)
+                rhs = FX_TO_TRITON[op_name](node.args)
                 triton_code_lines.append(f"{node.name} = {rhs}")
             else:
                 raise NotImplementedError(
-                    f"call_function {op_name} has not yet been implemented "
-                    f"in FX_TO_TRITON mapping."
-                )
-        elif node.op == "call_method":
-            op_name = node.target
-            if op_name in FX_TO_TRITON:
-                rhs = FX_TO_TRITON[op_name](node)
-                triton_code_lines.append(f"{node.name} = {rhs}")
-            else:
-                raise NotImplementedError(
-                    f"call_method {op_name} has not yet been implemented "
+                    f"{node.op} {op_name} has not yet been implemented "
                     f"in FX_TO_TRITON mapping."
                 )
         elif node.op == "output":

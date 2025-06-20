@@ -12,13 +12,20 @@ from flashsnn.ops import torch2triton
 from flashsnn.ops import surrogate_kernels, lif
 from flashsnn.utils import assert_close, type_dict
 
-if __name__ == "__main__":
 
-    def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor):
-        h = v*beta + x
-        s = torch2triton.spike_fn(h, 1.)
-        v = h * (1.-s)
-        return s, v
+@torch.fx.wrap
+def spike_fn(h):
+    return (h >= 0.).to(h.dtype)
+
+
+def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor):
+    h = v*beta + x
+    s = spike_fn(h - 1.)
+    v = h * (1.-s)
+    return s, v
+
+
+if __name__ == "__main__":
 
     traced = fx.symbolic_trace(lif_core)
     print("Forward Graph:")

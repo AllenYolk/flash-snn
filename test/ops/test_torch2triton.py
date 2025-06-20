@@ -63,9 +63,14 @@ def test_sigmoid_sg_torch2triton(shape, dtype):
     assert_close(sg1, sg2, prefix="sg_sigmoid")
 
 
+@torch.fx.wrap
+def spike_fn(h):
+    return (h >= 0.).to(h.dtype)
+
+
 def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor):
     h = v*beta + x
-    s = torch2triton.spike_fn(h, 1.)
+    s = spike_fn(h - 1.)
     v = h * (1.-s)
     return s, v
 
