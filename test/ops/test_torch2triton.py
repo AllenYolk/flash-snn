@@ -8,11 +8,12 @@ import triton
 import triton.language as tl
 
 from flashsnn.ops import torch2triton
-from flashsnn.ops import surrogate_kernels
+from flashsnn.ops import surrogate_kernels, lif
 from flashsnn.utils import assert_close, type_dict
 
-SHAPE_LIST = [(32, 3, 224, 224), (23, 700)]
+SHAPE_LIST = [(4, 3, 3, 224, 224), (17, 5, 700)]
 DTYPE_LIST = [torch.float32, torch.float16]
+BETA_LIST = [0.5, 0.9, 0.1]
 
 
 def sigmoid_surrogate_torch(
@@ -50,7 +51,7 @@ def sg_high_level_kernel_wrapper(h: torch.Tensor, op: triton.JITFunction):
 
 @pytest.mark.parametrize("shape", SHAPE_LIST)
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
-def test_sigmoid_sg(shape, dtype):
+def test_sigmoid_sg_torch2triton(shape, dtype):
     x = torch.randn(shape, dtype=dtype, device="cuda")
     sg1 = sg_high_level_kernel_wrapper(
         x, surrogate_kernels.sigmoid_surrogate_backward
@@ -62,8 +63,85 @@ def test_sigmoid_sg(shape, dtype):
     assert_close(sg1, sg2, prefix="sg_sigmoid")
 
 
-def lif_core(x: torch.Tensor, v: torch.Tensor, beta: float):
+def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor, dtype):
     h = v*beta + x
-    s = (h >= 1.).to(torch.float32)
+    s = (h >= 1.).to(dtype)
     v = h * (1.-s)
     return s, v
+
+
+@triton.jit
+def _multistep_lif_high_level_inference_kernel(
+    x_seq_ptr,  # [T, NCL]
+    s_seq_ptr,
+    beta,
+    T: tl.constexpr,
+    NCL: tl.constexpr,
+    BLOCK_NCL: tl.constexpr,
+    dtype: tl.constexpr,
+    op: tl.constexpr,
+):
+    pid_ncl = tl.program_id(0)
+    ncl_offset = pid_ncl * BLOCK_NCL
+
+    v = tl.zeros([BLOCK_NCL], dtype=dtype)
+    beta = tl.full([1], beta, dtype=dtype)
+    one = tl.full([1], 1., dtype=dtype)
+
+    for t in tl.static_range(0, T, 1):
+        x_ptrs = tl.make_block_ptr(
+            x_seq_ptr,
+            shape=(T, NCL),
+            strides=(NCL, 1),
+            offsets=(t, ncl_offset),
+            block_shape=(1, BLOCK_NCL),
+            order=(1, 0)
+        )
+        x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
+
+        s, v = op(x, v, beta, dtype)
+
+        s_ptrs = tl.make_block_ptr(
+            s_seq_ptr,
+            shape=(T, NCL),
+            strides=(NCL, 1),
+            offsets=(t, ncl_offset),
+            block_shape=(1, BLOCK_NCL),
+            order=(1, 0)
+        )
+        tl.store(s_ptrs, s, boundary_check=(1,))
+
+
+def multistep_lif_high_level_inference_kernel_wrapper(
+    x_seq: torch.Tensor, beta: float, op: triton.JITFunction
+):
+    T = x_seq.shape[0]
+    NCL = x_seq[0].numel()
+    BLOCK_NCL = 256
+    s_seq = torch.empty_like(x_seq)
+    dtype = x_seq.dtype
+    grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
+
+    print(x_seq.dtype, s_seq.dtype)
+    _multistep_lif_high_level_inference_kernel[grid](
+        x_seq,
+        s_seq,
+        beta,
+        T=T,
+        NCL=NCL,
+        BLOCK_NCL=BLOCK_NCL,
+        dtype=type_dict[dtype],
+        op=op,
+    )
+    return s_seq
+
+
+@pytest.mark.parametrize("shape", SHAPE_LIST)
+@pytest.mark.parametrize("dtype", DTYPE_LIST)
+@pytest.mark.parametrize("beta", BETA_LIST)
+def test_lif_torch2triton(shape, dtype, beta):
+    x = torch.randn(shape, dtype=dtype, device="cuda")
+    s1 = lif.multistep_lif_hard_inference(x, beta)
+    core = torch2triton.transpile_triton_code(lif_core, verbose=True)
+    s2 = multistep_lif_high_level_inference_kernel_wrapper(x, beta, core)
+    assert_close(s1, s2, prefix="lif_spike")
