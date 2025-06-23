@@ -156,7 +156,6 @@ def _multistep_lif_soft_not_detached_backward_kernel(
 
     grad_v = tl.zeros([BLOCK_NCL], dtype=dtype)
     beta = tl.full([1], beta, dtype=dtype)
-    one = tl.full([1], 1., dtype=dtype)
 
     for t in tl.static_range(T - 1, -1, -1):
         grad_s_ptrs = tl.make_block_ptr(
@@ -180,7 +179,7 @@ def _multistep_lif_soft_not_detached_backward_kernel(
         )
         h = tl.load(h_ptrs, boundary_check=(1,), padding_option="zero")
 
-        sg = sg_fn(h - one, dtype)
+        sg = sg_fn(h - 1., dtype)
         grad_v = tl.fma(grad_s - grad_v, sg, grad_v)
 
         grad_x_ptrs = tl.make_block_ptr(
@@ -220,7 +219,6 @@ def _multistep_lif_soft_detached_backward_kernel(
 
     grad_v = tl.zeros([BLOCK_NCL], dtype=dtype)
     beta = tl.full([1], beta, dtype=dtype)
-    one = tl.full([1], 1., dtype=dtype)
 
     for t in tl.static_range(T - 1, -1, -1):
         grad_s_ptrs = tl.make_block_ptr(
@@ -244,7 +242,7 @@ def _multistep_lif_soft_detached_backward_kernel(
         )
         h = tl.load(h_ptrs, boundary_check=(1,), padding_option="zero")
 
-        sg = sg_fn(h - one, dtype)
+        sg = sg_fn(h - 1., dtype)
         grad_v = tl.fma(grad_s, sg, grad_v)
 
         grad_x_ptrs = tl.make_block_ptr(

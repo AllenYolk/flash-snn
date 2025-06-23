@@ -29,6 +29,13 @@ def lif_core_generator(beta):
     return lif_core
 
 
+def lif_core2(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor):
+    h = v*beta + x
+    s = spike_fn(h - 1.)
+    v = h * (1.-s)
+    return s, v
+
+
 if __name__ == "__main__":
 
     lif_core = lif_core_generator(beta=0.5)
@@ -36,7 +43,14 @@ if __name__ == "__main__":
     print("Forward Graph:")
     print(traced.graph)
     print("==" * 20)
-
     backward_triton_code = torch2triton.generate_backward_triton_code(
-        lif_core, requires_grad=(True, True, False, False), verbose=True
+        lif_core, requires_grad=(True, True), verbose=True
+    )
+
+    traced = fx.symbolic_trace(lif_core2)
+    print("Forward Graph:")
+    print(traced.graph)
+    print("==" * 20)
+    backward_triton_code = torch2triton.generate_backward_triton_code(
+        lif_core2, requires_grad=(True, True, False), verbose=True
     )

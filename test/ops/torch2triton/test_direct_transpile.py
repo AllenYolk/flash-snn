@@ -83,6 +83,8 @@ def lif_core_generator(beta):
         v = h * (1.-s)
         return s, v
 
+    lif_core.__name__ = "lif_core_" + str(beta)[-1]
+
     return lif_core
 
 
@@ -101,7 +103,6 @@ def _multistep_lif_high_level_inference_kernel(
     ncl_offset = pid_ncl * BLOCK_NCL
 
     v = tl.zeros([BLOCK_NCL], dtype=dtype)
-    beta = tl.full([1], beta, dtype=dtype)
 
     for t in tl.static_range(0, T, 1):
         x_ptrs = tl.make_block_ptr(
@@ -115,6 +116,7 @@ def _multistep_lif_high_level_inference_kernel(
         x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
 
         s, v = op(x, v)
+        tl.static_print(s.dtype, v.dtype)
 
         s_ptrs = tl.make_block_ptr(
             s_seq_ptr,
@@ -157,8 +159,15 @@ def multistep_lif_high_level_inference_kernel_wrapper(
 def test_lif_torch2triton(shape, dtype, beta):
     x = torch.randn(shape, dtype=dtype, device="cuda")
     s1 = lif.multistep_lif_hard_inference(x, beta)
+
     core = torch2triton.transpile_triton_code(
-        lif_core_generator(beta), verbose=True
+        lif_core_generator(beta=beta), verbose=True
     )
     s2 = multistep_lif_high_level_inference_kernel_wrapper(x, beta, core)
     assert_close(s1, s2, prefix="lif_spike")
+
+
+if __name__ == "__main__":
+    test_lif_torch2triton((4, 3, 3, 224, 224), torch.float16, 0.5)
+    test_lif_torch2triton((4, 3, 3, 224, 224), torch.float16, 0.1)
+    test_lif_torch2triton((4, 3, 3, 224, 224), torch.float16, 0.9)

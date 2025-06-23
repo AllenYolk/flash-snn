@@ -43,7 +43,6 @@ def _multistep_plif_hard_inference_kernel(
     ncl_offset = pid_ncl * BLOCK_NCL
 
     v = tl.zeros([BLOCK_NCL], dtype=dtype)
-    one = tl.full([1], 1., dtype=dtype)
 
     for t in tl.static_range(0, T, 1):
         x_ptrs = tl.make_block_ptr(
@@ -67,7 +66,7 @@ def _multistep_plif_hard_inference_kernel(
 
         h = tl.fma(beta, v, x)  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
-        v = h * (one-s)  # hard_reset, v_reset = 0
+        v = h * (1.-s)  # hard_reset, v_reset = 0
 
         s_ptrs = tl.make_block_ptr(
             s_seq_ptr,
@@ -104,7 +103,6 @@ def _multistep_plif_hard_forward_kernel(
     ncl_offset = pid_ncl * BLOCK_NCL
 
     v = tl.zeros([BLOCK_NCL], dtype=dtype)
-    one = tl.full([1], 1., dtype=dtype)
 
     for t in tl.static_range(0, T, 1):
         x_ptrs = tl.make_block_ptr(
@@ -128,7 +126,7 @@ def _multistep_plif_hard_forward_kernel(
 
         h = tl.fma(beta, v, x)
         s = (h >= 1.).to(dtype)  # v_th = 1
-        v = h * (one-s)  # hard_reset, v_reset = 0
+        v = h * (1.-s)  # hard_reset, v_reset = 0
 
         s_ptrs = tl.make_block_ptr(
             s_seq_ptr,
@@ -186,7 +184,6 @@ def _multistep_plif_hard_not_detached_backward_kernel(
     ncl_offset = pid_ncl * BLOCK_NCL
 
     grad_v = tl.zeros([BLOCK_NCL], dtype=dtype)
-    one = tl.full([1], 1., dtype=dtype)
 
     for t in tl.static_range(T - 1, -1, -1):
         grad_s_ptrs = tl.make_block_ptr(
@@ -239,9 +236,9 @@ def _multistep_plif_hard_not_detached_backward_kernel(
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
 
-        sg = sg_fn(h - one, dtype)
+        sg = sg_fn(h - 1., dtype)
         # grad_v = (grad_s - grad_v*h) * sg + grad_v * (one-s)
-        grad_v = tl.fma(tl.fma(-grad_v, h, grad_s), sg, grad_v * (one-s))
+        grad_v = tl.fma(tl.fma(-grad_v, h, grad_s), sg, grad_v * (1.-s))
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,
@@ -294,7 +291,6 @@ def _multistep_plif_hard_detached_backward_kernel(
     ncl_offset = pid_ncl * BLOCK_NCL
 
     grad_v = tl.zeros([BLOCK_NCL], dtype=dtype)
-    one = tl.full([1], 1., dtype=dtype)
 
     for t in tl.static_range(T - 1, -1, -1):
         grad_s_ptrs = tl.make_block_ptr(
@@ -347,9 +343,9 @@ def _multistep_plif_hard_detached_backward_kernel(
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
 
-        sg = sg_fn(h - one, dtype)
+        sg = sg_fn(h - 1., dtype)
         # grad_v = grad_s*sg + grad_v * (one-s)
-        grad_v = tl.fma(grad_s, sg, grad_v * (one-s))
+        grad_v = tl.fma(grad_s, sg, grad_v * (1.-s))
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,
