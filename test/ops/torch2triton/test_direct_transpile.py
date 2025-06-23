@@ -13,7 +13,7 @@ from flashsnn.utils import assert_close, type_dict
 
 SHAPE_LIST = [(4, 3, 3, 224, 224), (17, 5, 700)]
 DTYPE_LIST = [torch.float32, torch.float16]
-BETA_LIST = [0.5, 0.9, 0.1]
+BETA_LIST = [0.5, 0., 0.9, 0.1]
 
 
 def sigmoid_surrogate_torch(
@@ -75,6 +75,17 @@ def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor):
     return s, v
 
 
+def lif_core_generator(beta):
+
+    def lif_core(x: torch.Tensor, v: torch.Tensor):
+        h = v*beta + x
+        s = spike_fn(h - 1.)
+        v = h * (1.-s)
+        return s, v
+
+    return lif_core
+
+
 @triton.jit
 def _multistep_lif_high_level_inference_kernel(
     x_seq_ptr,  # [T, NCL]
@@ -91,7 +102,6 @@ def _multistep_lif_high_level_inference_kernel(
 
     v = tl.zeros([BLOCK_NCL], dtype=dtype)
     beta = tl.full([1], beta, dtype=dtype)
-    one = tl.full([1], 1., dtype=dtype)
 
     for t in tl.static_range(0, T, 1):
         x_ptrs = tl.make_block_ptr(
@@ -104,7 +114,7 @@ def _multistep_lif_high_level_inference_kernel(
         )
         x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
 
-        s, v = op(x, v, beta)
+        s, v = op(x, v)
 
         s_ptrs = tl.make_block_ptr(
             s_seq_ptr,
@@ -147,6 +157,8 @@ def multistep_lif_high_level_inference_kernel_wrapper(
 def test_lif_torch2triton(shape, dtype, beta):
     x = torch.randn(shape, dtype=dtype, device="cuda")
     s1 = lif.multistep_lif_hard_inference(x, beta)
-    core = torch2triton.transpile_triton_code(lif_core, verbose=True)
+    core = torch2triton.transpile_triton_code(
+        lif_core_generator(beta), verbose=True
+    )
     s2 = multistep_lif_high_level_inference_kernel_wrapper(x, beta, core)
     assert_close(s1, s2, prefix="lif_spike")

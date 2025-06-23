@@ -7,6 +7,13 @@ import triton
 from flashsnn.ops.torch2triton.direct_transpile import generate_triton_code_str
 from flashsnn.ops.torch2triton.direct_transpile import compile_triton_code_str
 
+
+def _uw(arg):
+    if isinstance(arg, fx.Node):
+        return arg.name
+    return arg
+
+
 # key: forward operator name
 # value: Callable node -> tuple
 #   - node: the forward node *args -> z
@@ -27,21 +34,21 @@ BACKWARD_RULES = {
         ),
     'mul':
         lambda node: (
-            ("p_mul_1", [node.args[1].name]),  # dx = dz * y
-            ("p_mul_2", [node.args[0].name])  # dy = dz * x
+            ("p_mul_1", [_uw(node.args[1])]),  # dx = dz * y
+            ("p_mul_2", [_uw(node.args[0])])  # dy = dz * x
         ),
     'sigmoid':
         lambda node: (
-            ("p_sigmoid", [node.name]),  # dx = dz * z * (1 - z)
+            ("p_sigmoid", [_uw(node)]),  # dx = dz * z * (1 - z)
         ),
     'to':
         lambda node: (
-            ("p_to", [node.args[0].name + "_dtype"]),  # dx = dz.to(x.dtype)
+            ("p_to", [_uw(node.args[0]) + "_dtype"]),  # dx = dz.to(x.dtype)
             ("0", []),
         ),
     'spike_fn':
         lambda node: (
-            ("p_spike_fn", [node.args[0].name]),  # dx = dz * spike_fn(x)
+            ("p_spike_fn", [_uw(node.args[0])]),  # dx = dz * spike_fn(x)
         ),
 }
 
@@ -127,7 +134,11 @@ def generate_backward_fx_graph(
                 continue
             grad_args_in_backward_graph = []
             for grad_arg in grad_args:  # forward graph nodes -> backward graph nodes
-                grad_args_in_backward_graph.append(saved_results[grad_arg])
+                # fetch intermediate results
+                # if not available, use the literal value
+                grad_args_in_backward_graph.append(
+                    saved_results.get(grad_arg, grad_arg)
+                )
 
             grad_node = backward_graph.create_node(
                 op="call_method",

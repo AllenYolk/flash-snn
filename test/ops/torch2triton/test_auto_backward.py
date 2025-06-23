@@ -18,15 +18,20 @@ def spike_fn(h):
     return (h >= 0.).to(h.dtype)
 
 
-def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor):
-    h = v*beta + x
-    s = spike_fn(h - 1.)
-    v = h * (1.-s)
-    return s, v
+def lif_core_generator(beta):
+
+    def lif_core(x: torch.Tensor, v: torch.Tensor):
+        h = v*beta + x
+        s = spike_fn(h - 1.)
+        v = h * (1.-s)
+        return s, v
+
+    return lif_core
 
 
 if __name__ == "__main__":
 
+    lif_core = lif_core_generator(beta=0.5)
     traced = fx.symbolic_trace(lif_core)
     print("Forward Graph:")
     print(traced.graph)
