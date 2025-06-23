@@ -1,12 +1,11 @@
 from typing import Tuple, Callable
 
 import torch
-import torch.nn as nn
 import torch.fx as fx
 import triton
 
-from flashsnn.ops.torch2triton.transpile import generate_triton_code_str
-from flashsnn.ops.torch2triton.transpile import compile_triton_code_str
+from flashsnn.ops.torch2triton.direct_transpile import generate_triton_code_str
+from flashsnn.ops.torch2triton.direct_transpile import compile_triton_code_str
 
 # key: forward operator name
 # value: Callable node -> tuple
@@ -50,14 +49,25 @@ BACKWARD_RULES = {
 def generate_backward_fx_graph(
     forward_graph: fx.Graph, requires_grad: Tuple[bool]
 ) -> fx.Graph:
+    """Given a fx.Graph, generate another fx.Graph for its backward pass. Also,
+    modify the forward graph (i.e. return intermediate results).
+
+    Args:
+        forward_graph (fx.Graph)
+        requires_grad (Tuple[bool]): specifies whether each input (a.k.a. 
+            placeholder) requires gradient.
+
+    Returns:
+        both the adjusted forward graph and the backward graph.
+    """
     backward_graph = fx.Graph()
 
     # scan the forward graph, and identify the inputs to the backward graph
     # 1. grad_output(s)
     # 2. saved results (forward inputs and intermediate results)
 
-    # grad_output(s) should be placed at the beginning!
     grad_nodes = {}  # forward node name -> gradient fx.Node in backward graph
+    forward_returns = {}  # forward ret. val. name -> fx.Node in forward graph
     for node in forward_graph.nodes:
         if node.op == "output":  # create placeholders for grad_output(s)
             output_args = node.args[0]
@@ -68,9 +78,13 @@ def generate_backward_fx_graph(
                     f"grad_{output_arg.name}_", type_expr=output_arg.type
                 )
                 grad_nodes[output_arg.name] = grad_node
+                forward_returns[output_arg.name] = output_arg
 
     saved_results = {}  # forward node name -> saved fx.Node in backward graph
+    saved_results_forward = {
+    }  # forward node name -> saved fx.Node in forward graph
     for node in forward_graph.nodes:
+        saved_results_forward[node.name] = node
         if node.op in ["placeholder", "call_function", "call_method"]:
             saved_results[node.name] = backward_graph.placeholder(
                 node.name,
@@ -153,15 +167,27 @@ def generate_backward_fx_graph(
         if len(p.users) == 0:
             backward_graph.erase_node(p)
 
-    return backward_graph
+    # The forward function should also return the required intermediate values.
+    additional_forward_returns = []
+    for p in backward_graph.find_nodes(op="placeholder"):
+        if p.name in saved_results_forward and p.name not in forward_returns:
+            additional_forward_returns.append(saved_results_forward[p.name])
+    # Find the output node of the forward graph
+    full_forward_returns = (
+        tuple(forward_returns.values()) + tuple(additional_forward_returns)
+    )
+    forward_graph.erase_node(forward_graph.find_nodes(op="output")[0])
+    forward_graph.output(full_forward_returns)
+
+    return forward_graph, backward_graph
 
 
 def generate_backward_triton_code(
     fn: Callable,
     requires_grad: Tuple[bool],
     verbose: bool = False
-) -> triton.JITFunction:
-    """Given a PyTorch function, generate its BP's Triton JIT function.
+) -> Tuple[triton.JITFunction]:
+    """Given a PyTorch function, generate its FP and BP's Triton JIT function.
 
     torch2triton module is still in development. Only a limited set of PyTorch
     operations (mainly element-wise operations) are supported currently.
@@ -174,19 +200,32 @@ def generate_backward_triton_code(
             Defaults to False.
 
     Returns:
-        triton.JITFunction
+        (triton.JITFunction, triton.JITFunction)
     """
     traced = fx.symbolic_trace(fn)
-    backward_graph = generate_backward_fx_graph(traced.graph, requires_grad)
+    forward_graph, backward_graph = generate_backward_fx_graph(
+        traced.graph, requires_grad
+    )
 
-    kernel_str, kernel_name = generate_triton_code_str(
-        backward_graph, fn.__name__, verbose
+    fwd_kernel_str, fwd_kernel_name = generate_triton_code_str(
+        forward_graph, fn.__name__ + "_forward", verbose
+    )
+    bwd_kernel_str, bwd_kernel_name = generate_triton_code_str(
+        backward_graph, fn.__name__ + "_backward", verbose
     )
     if verbose:
         print("=" * 100)
         print("Generated Triton code:\n```")
-        print(kernel_str)
+        print(fwd_kernel_str)
+        print("```\n\n```")
+        print(bwd_kernel_str)
         print("```")
         print("=" * 100)
-    kernel_exe = compile_triton_code_str(kernel_str, kernel_name, verbose)
-    return kernel_exe
+
+    fwd_kernel_exe = compile_triton_code_str(
+        fwd_kernel_str, fwd_kernel_name, verbose
+    )
+    bwd_kernel_exe = compile_triton_code_str(
+        bwd_kernel_str, bwd_kernel_name, verbose
+    )
+    return fwd_kernel_exe, bwd_kernel_exe
