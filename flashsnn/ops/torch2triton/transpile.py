@@ -1,6 +1,5 @@
 from typing import Callable, Tuple
 import tempfile
-import os
 from pathlib import Path
 
 import torch
@@ -21,6 +20,7 @@ def _uw(arg) -> str:  # unwrap
 
 PI = 3.14159265358979
 
+# code generation rules
 FX_TO_TRITON = {
     # forward
     "add":
@@ -62,7 +62,7 @@ FX_TO_TRITON = {
         ),
 }
 
-INDENTATION = "    "
+INDENTATION = " " * 4  # four spaces
 
 
 def generate_triton_code_str(
@@ -70,6 +70,17 @@ def generate_triton_code_str(
     fn_name: str,
     verbose: bool = False,
 ) -> Tuple[str, str]:
+    """Given a fx.Graph, generate its corresponding Triton code string.
+
+    Args:
+        graph (fx.Graph)
+        fn_name (str): name of the original PyTorch function.
+        verbose (bool, optional): Defaults to False.
+
+    Returns:
+        Tuple[str, str]: the generated Triton code string and the name of the 
+            Triton function.
+    """
     if verbose:
         print(graph)
 
@@ -105,11 +116,11 @@ def generate_triton_code_str(
 
     prefix = "import triton\nimport triton.language as tl"
     signature = ", ".join(inputs)
-    signature = f"@triton.jit\ndef {fn_name}({signature}):"
+    signature = f"@triton.jit\ndef {fn_name}_triton({signature}):"
     triton_code_lines = f"\n{INDENTATION}".join(triton_code_lines)
     return (
         f"{prefix}\n\n{signature}\n{INDENTATION}{triton_code_lines}",
-        fn_name,
+        fn_name + "_triton",
     )
 
 

@@ -150,11 +150,3 @@ def test_lif_torch2triton(shape, dtype, beta):
     core = torch2triton.transpile_triton_code(lif_core, verbose=True)
     s2 = multistep_lif_high_level_inference_kernel_wrapper(x, beta, core)
     assert_close(s1, s2, prefix="lif_spike")
-
-
-if __name__ == "__main__":
-
-    def t(x):
-        return torch2triton.spike_fn(x, 1.)
-
-    print(torch.fx.symbolic_trace(t).graph)

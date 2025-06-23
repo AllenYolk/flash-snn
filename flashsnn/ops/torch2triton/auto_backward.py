@@ -65,7 +65,7 @@ def generate_backward_fx_graph(
                 output_args = (output_args,)
             for output_arg in output_args:  # fx.Node
                 grad_node = backward_graph.placeholder(
-                    f"grad_{output_arg.name}", type_expr=output_arg.type
+                    f"grad_{output_arg.name}_", type_expr=output_arg.type
                 )
                 grad_nodes[output_arg.name] = grad_node
 
@@ -120,7 +120,7 @@ def generate_backward_fx_graph(
                 target=grad_op,
                 # grad_output, plus required saved results
                 args=(dz, *grad_args_in_backward_graph),
-                name=f"grad_{arg.name}"
+                name=f"grad_{arg.name}_"
             )
             # check if grad_{arg.name} already exists
             if arg.name in grad_nodes:
@@ -130,7 +130,7 @@ def generate_backward_fx_graph(
                     op="call_method",
                     target="add",
                     args=(existing_grad_node, grad_node),
-                    name=f"grad_{arg.name}"
+                    name=f"grad_{arg.name}_"
                 )
                 grad_nodes[arg.name] = acc_grad_node
             else:
