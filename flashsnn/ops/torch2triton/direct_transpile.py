@@ -1,4 +1,4 @@
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Union, Optional
 import tempfile
 from pathlib import Path
 import hashlib
@@ -9,6 +9,7 @@ import triton
 import triton.language as tl
 
 from flashsnn.utils.dtype import type_str_dict
+from flashsnn.utils.cleanup import ensure_cleanup_tmp_python_files
 
 
 def _generate_hash(s: str, w: int = 8) -> str:
@@ -72,21 +73,26 @@ INDENTATION = " " * 4  # four spaces
 
 
 def generate_triton_code_str(
-    graph: fx.Graph,
-    fn_name: str,
+    graph: Union[fx.Graph, Callable],
+    fn_name: Optional[str] = None,
     verbose: bool = False,
 ) -> Tuple[str, str]:
     """Given a fx.Graph, generate its corresponding Triton code string.
 
     Args:
-        graph (fx.Graph)
-        fn_name (str): name of the original PyTorch function.
+        graph (fx.Graph or Callable): if a function is given, convert it to 
+            fx.Graph first.
+        fn_name (str): name of the original PyTorch function. If None and `graph`
+            is a function, `fn_name` will be set to the function name.
         verbose (bool, optional): Defaults to False.
 
     Returns:
         Tuple[str, str]: the generated Triton code string and the name of the 
             Triton function.
     """
+    if not isinstance(graph, fx.Graph):
+        fn_name = graph.__name__
+        graph = fx.symbolic_trace(graph).graph
     if verbose:
         print(graph)
 
@@ -130,10 +136,12 @@ def generate_triton_code_str(
     return f"{prefix}\n\n{signature}\n{triton_code_lines}", fn_name
 
 
+@ensure_cleanup_tmp_python_files
 def compile_triton_code_str(
     triton_code: str,
     kernel_name: str,
-    verbose: bool = False
+    verbose: bool = False,
+    name_space: dict = {},
 ) -> triton.JITFunction:
     # create a temporary file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
@@ -143,10 +151,11 @@ def compile_triton_code_str(
             print(f"Triton code `{kernel_name}` written to {fpath}")
 
     try:
-        name_space = {
+        name_space.update({
             "triton": triton,
             "tl": tl,
-        }
+            "__name__": "flashsnn.codegen.triton",  # TODO: any better choice?
+        })
         with open(fpath, "r") as f:
             code = compile(f.read(), fpath, "exec")
             exec(code, name_space)
@@ -190,5 +199,7 @@ def transpile_triton_code(
         print(kernel_str)
         print("```")
         print("=" * 100)
-    kernel_exe = compile_triton_code_str(kernel_str, kernel_name, verbose)
+    kernel_exe = compile_triton_code_str(
+        kernel_str, kernel_name, verbose=verbose
+    )
     return kernel_exe

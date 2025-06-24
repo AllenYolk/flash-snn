@@ -43,7 +43,7 @@ if __name__ == "__main__":
     print("Forward Graph:")
     print(traced.graph)
     print("==" * 20)
-    backward_triton_code = torch2triton.generate_backward_triton_code(
+    torch2triton.generate_backward_triton_code(
         lif_core, requires_grad=(True, True), verbose=True
     )
 
@@ -51,6 +51,6 @@ if __name__ == "__main__":
     print("Forward Graph:")
     print(traced.graph)
     print("==" * 20)
-    backward_triton_code = torch2triton.generate_backward_triton_code(
+    torch2triton.generate_backward_triton_code(
         lif_core2, requires_grad=(True, True, False), verbose=True
     )

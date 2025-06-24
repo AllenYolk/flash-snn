@@ -1,4 +1,4 @@
-from typing import Tuple, Callable
+from typing import Tuple, Callable, List
 
 import torch
 import torch.fx as fx
@@ -55,18 +55,21 @@ BACKWARD_RULES = {
 
 def generate_backward_fx_graph(
     forward_graph: fx.Graph, requires_grad: Tuple[bool]
-) -> fx.Graph:
+) -> List[fx.Graph]:
     """Given a fx.Graph, generate another fx.Graph for its backward pass. Also,
     modify the forward graph (i.e. return intermediate results).
 
     Args:
-        forward_graph (fx.Graph)
+        forward_graph (fx.Graph): if a function is given, convert it to the
+            corresponding fx.Graph first!
         requires_grad (Tuple[bool]): specifies whether each input (a.k.a. 
             placeholder) requires gradient.
 
     Returns:
-        both the adjusted forward graph and the backward graph.
+        the adjusted forward graph and the backward graph
     """
+    if not isinstance(forward_graph, fx.Graph):
+        forward_graph = fx.symbolic_trace(forward_graph).graph
     backward_graph = fx.Graph()
 
     # scan the forward graph, and identify the inputs to the backward graph
@@ -87,9 +90,8 @@ def generate_backward_fx_graph(
                 grad_nodes[output_arg.name] = grad_node
                 forward_returns[output_arg.name] = output_arg
 
-    saved_results = {}  # forward node name -> saved fx.Node in backward graph
-    saved_results_forward = {
-    }  # forward node name -> saved fx.Node in forward graph
+    saved_results = {}  # forward node name -> saved Node in backward graph
+    saved_results_forward = {}  # forward node name -> saved Node in fwd graph
     for node in forward_graph.nodes:
         saved_results_forward[node.name] = node
         if node.op in ["placeholder", "call_function", "call_method"]:
@@ -211,7 +213,7 @@ def generate_backward_triton_code(
             Defaults to False.
 
     Returns:
-        (triton.JITFunction, triton.JITFunction)
+        the forward and backward JIT functions
     """
     traced = fx.symbolic_trace(fn)
     forward_graph, backward_graph = generate_backward_fx_graph(
@@ -234,9 +236,45 @@ def generate_backward_triton_code(
         print("=" * 100)
 
     fwd_kernel_exe = compile_triton_code_str(
-        fwd_kernel_str, fwd_kernel_name, verbose
+        fwd_kernel_str, fwd_kernel_name, verbose=verbose
     )
     bwd_kernel_exe = compile_triton_code_str(
-        bwd_kernel_str, bwd_kernel_name, verbose
+        bwd_kernel_str, bwd_kernel_name, verbose=verbose
     )
     return fwd_kernel_exe, bwd_kernel_exe
+
+
+def get_bi2fo(
+    fwd_graph: fx.Graph,
+    bwd_graph: fx.Graph,
+    verbose: bool = False,
+) -> List[int]:
+    """bi2fo is a data structure that specifies the mapping between backward
+    kernel's input and forward kernel's output.
+
+    bi2fo[i] = j means that the i-th input of bwd_graph is the j-th output of 
+    fwd_graph. if j==-1, the i-th input of bwd_graph cannot be found in 
+    fwd_graph's outputs.
+    """
+    fwd_outputs = []
+    for n in fwd_graph.find_nodes(op="output"):
+        for a in n.args[0]:
+            if isinstance(a, fx.Node):
+                a = (a,)
+            for p in a:
+                fwd_outputs.append(p.name)
+
+    bwd_inputs = [
+        input.name for input in bwd_graph.find_nodes(op="placeholder")
+    ]
+
+    bi2fo = []
+    for bwd_input in bwd_inputs:
+        idx = -1
+        for i, fwd_output in enumerate(fwd_outputs):
+            if bwd_input == fwd_output:
+                idx = i
+        bi2fo.append(idx)
+    if verbose:
+        print("bi2fo: ", bi2fo)
+    return bi2fo
