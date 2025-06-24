@@ -1,6 +1,7 @@
 from typing import Callable, Tuple
 import tempfile
 from pathlib import Path
+import hashlib
 
 import torch
 import torch.fx as fx
@@ -8,6 +9,11 @@ import triton
 import triton.language as tl
 
 from flashsnn.utils.dtype import type_str_dict
+
+
+def _generate_hash(s: str, w: int = 8) -> str:
+    hasher = hashlib.sha256(s.encode("utf-8"))
+    return hasher.hexdigest()[:w]
 
 
 def _uw(arg) -> str:  # unwrap
@@ -114,14 +120,14 @@ def generate_triton_code_str(
                 f"Operation {node.op} has not yet been implemented."
             )
 
-    prefix = "import triton\nimport triton.language as tl"
-    signature = ", ".join(inputs)
-    signature = f"@triton.jit\ndef {fn_name}_triton({signature}):"
-    triton_code_lines = f"\n{INDENTATION}".join(triton_code_lines)
-    return (
-        f"{prefix}\n\n{signature}\n{INDENTATION}{triton_code_lines}",
-        fn_name + "_triton",
+    triton_code_lines = f"{INDENTATION}" + f"\n{INDENTATION}".join(
+        triton_code_lines
     )
+    fn_name = f"{fn_name}_{_generate_hash(triton_code_lines)}"
+    signature = ", ".join(inputs)
+    signature = f"@triton.jit\ndef {fn_name}({signature}):"
+    prefix = "import triton\nimport triton.language as tl"
+    return f"{prefix}\n\n{signature}\n{triton_code_lines}", fn_name
 
 
 def compile_triton_code_str(

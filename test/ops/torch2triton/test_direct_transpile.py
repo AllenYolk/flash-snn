@@ -83,8 +83,6 @@ def lif_core_generator(beta):
         v = h * (1.-s)
         return s, v
 
-    lif_core.__name__ = "lif_core_" + str(beta)[-1]
-
     return lif_core
 
 

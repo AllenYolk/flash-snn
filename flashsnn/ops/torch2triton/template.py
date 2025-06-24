@@ -5,7 +5,7 @@ INDENTATION = " " * 4
 
 inference_template = """
 @triton.jit
-def _spiking_neuron_inference_kernel(
+def _spiking_neuron_inference_kernel_{hash}(
     x_seq_ptr,  # [T, NCL]
     s_seq_ptr,
     T: tl.constexpr,
@@ -44,12 +44,14 @@ def _spiking_neuron_inference_kernel(
 
 
 def get_spiking_neuron_inference_kernel(core: triton.JITFunction):
-    return inference_template.format(core=core)
+    core = core.__name__
+    hash = core[-8:]
+    return inference_template.format(core=core, hash=hash)
 
 
 forward_template = """
 @triton.jit
-def _spiking_neuron_inference_kernel(
+def _spiking_neuron_inference_kernel_{hash}(
     x_seq_ptr,  # [T, NCL]
     s_seq_ptr,
     {intermediate_result_signature},
@@ -104,6 +106,9 @@ store_template = """
 def get_spiking_neuron_forward_kernel(
     core: triton.JITFunction, intermediate_result_names
 ):
+    core = core.__name__
+    hash = core[-8:]
+
     intermediate_result_signature = f",\n{INDENTATION}".join([
         f"{name}_seq_ptr" for name in intermediate_result_names
     ])
@@ -116,6 +121,7 @@ def get_spiking_neuron_forward_kernel(
 
     return forward_template.format(
         core=core,
+        hash=hash,
         intermediate_result_signature=intermediate_result_signature,
         intermediate_result_core=intermediate_result_core,
         intermediate_result_store=intermediate_result_store
@@ -124,7 +130,7 @@ def get_spiking_neuron_forward_kernel(
 
 backward_template = """
 @triton.jit
-def _spiking_neuron_backward_kernel(
+def _spiking_neuron_backward_kernel_{hash}(
     grad_s_seq_ptr,
     {intermediate_result_signature},
     grad_x_seq_ptr,
@@ -182,6 +188,9 @@ load_template = """
 def get_spiking_neuron_backward_kernel(
     core: triton.JITFunction, intermediate_result_names
 ):
+    core = core.__name__
+    hash = core[-8:]
+
     intermediate_result_signature = f",\n{INDENTATION}".join([
         f"{name}_seq_ptr" for name in intermediate_result_names
     ])
@@ -194,6 +203,7 @@ def get_spiking_neuron_backward_kernel(
 
     return backward_template.format(
         core=core,
+        hash=hash,
         intermediate_result_signature=intermediate_result_signature,
         intermediate_result_load=intermediate_result_load,
         intermediate_result_core=intermediate_result_core,
