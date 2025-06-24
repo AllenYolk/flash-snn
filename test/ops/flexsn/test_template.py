@@ -92,7 +92,7 @@ def test_flexsn_forward_backward(beta, shape, dtype):
     s = flexsn.FlexSNFunction.apply(x1, bi2fo, f_inf, f_fwd, f_bwd)
     s.backward(gs)
 
-    ss = lif.MultistepLIFHardDetachedFunction.apply(x2, beta)
+    ss = lif.MultistepLIFHardNotDetachedFunction.apply(x2, beta)
     ss.backward(gs)
 
     assert_close(s, ss, prefix="spike")

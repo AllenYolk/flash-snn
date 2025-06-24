@@ -64,8 +64,9 @@ FX_TO_TRITON = {
         lambda args: f"{_uw(args[0])}.to({_uw(args[1])})",
     "p_spike_fn":
         lambda args: (
-            f"(1. / tl.fma({PI}*{_uw(args[0])}, {PI}*{_uw(args[0])}, 1.))"
-            f".to({_uw(args[0])}.dtype)"
+            f"({_uw(args[0])} / "
+            f"tl.fma({PI}*{_uw(args[1])}, {PI}*{_uw(args[1])}, 1.))"
+            f".to({_uw(args[1])}.dtype)"
         ),
 }
 
