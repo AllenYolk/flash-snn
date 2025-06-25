@@ -1,16 +1,11 @@
-import pytest
 import sys
 
 sys.path.append("./")
 
 import torch
 import torch.fx as fx
-import triton
-import triton.language as tl
 
-from flashsnn.ops import torch2triton
-from flashsnn.ops import surrogate_kernels, lif
-from flashsnn.utils import assert_close, type_dict
+from flashsnn import torch2triton
 
 
 @torch.fx.wrap

@@ -4,8 +4,8 @@ import torch
 import torch.fx as fx
 import triton
 
-from flashsnn.ops.torch2triton.direct_transpile import generate_triton_code_str
-from flashsnn.ops.torch2triton.direct_transpile import compile_triton_code_str
+from flashsnn.torch2triton.direct_transpile import generate_triton_code_str
+from flashsnn.torch2triton.direct_transpile import compile_triton_code_str
 
 
 def _uw(arg):

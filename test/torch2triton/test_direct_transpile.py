@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from flashsnn.ops import torch2triton
+from flashsnn import torch2triton
 from flashsnn.ops import surrogate_kernels, lif
 from flashsnn.utils import assert_close, type_dict
 

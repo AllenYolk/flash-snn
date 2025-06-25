@@ -5,7 +5,8 @@ sys.path.append("./")
 
 import torch
 
-from flashsnn.ops import flexsn, torch2triton
+from flashsnn import torch2triton
+from flashsnn.ops import flexsn
 from flashsnn.ops import lif
 from flashsnn.utils import assert_close
 

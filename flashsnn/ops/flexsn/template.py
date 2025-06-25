@@ -2,7 +2,7 @@ from typing import List
 
 import triton
 
-from flashsnn.ops.torch2triton import compile_triton_code_str
+from flashsnn.torch2triton import compile_triton_code_str
 
 INDENTATION = " " * 4
 
@@ -122,7 +122,7 @@ store_template = """
 def get_flexsn_forward_kernel(
     core_str: str,
     core_name: str,
-    bi2fo: List[int],  # flashsnn.ops.torch2triton.auto_backward.get_bi2fo()
+    bi2fo: List[int],  # flashsnn.torch2triton.auto_backward.get_bi2fo()
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
@@ -226,7 +226,7 @@ load_template = """
 def get_flexsn_backward_kernel(
     core_str: str,
     core_name: str,
-    bi2fo: str,  # flashsnn.ops.torch2triton.auto_backward.get_bi2fo()
+    bi2fo: str,  # flashsnn.torch2triton.auto_backward.get_bi2fo()
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
