@@ -59,7 +59,7 @@ def get_flexsn_inference_kernel(
         print("Generated flexsn inference kernel:")
         print("```")
         print(kernel_str)
-        print("```")
+        print("```\n")
     kernel_exe = compile_triton_code_str(kernel_str, kernel_name, verbose)
     return kernel_exe
 
@@ -122,15 +122,15 @@ store_template = """
 def get_flexsn_forward_kernel(
     core_str: str,
     core_name: str,
-    bi2fo: List[int],  # see `get_bi2fo()`
+    bi2fo: List[int],  # flashsnn.ops.torch2triton.auto_backward.get_bi2fo()
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
 
-    # Collect bwd_core's required inputs except for `s_seq`, which will always be
-    # returned. We use bi2fo[j] > 0 to filter out s and unmapped values. Notice
-    # that extra_signature will follow the order of bi2fo (a.k.a. the order of
-    # bwd_core's required inputs).
+    # Collect bwd_core's required inputs. s_seq should bot be included here, as
+    # it has been included in the forward kernel. We use bi2fo[j] > 0 to filter
+    # out s_seq (bi2fo==0) and unmapped values. Notice that extra_signature
+    # will follow bi2fo's order (a.k.a. bwd_core's input order).
     extra_signature = f",\n{INDENTATION}".join([
         (f"v_seq_ptr" if i == 1 else f"res{i}_seq_ptr") for i in bi2fo if i > 0
     ])
@@ -226,13 +226,14 @@ load_template = """
 def get_flexsn_backward_kernel(
     core_str: str,
     core_name: str,
-    bi2fo: str,  # see `get_bi2fo`
+    bi2fo: str,  # flashsnn.ops.torch2triton.auto_backward.get_bi2fo()
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
 
     # Set bwd kernel's signature according to bwd_core's required inputs. Notice
-    # that the order of these arguments follows the same order as bi2fo.
+    # that the order of these arguments follows bi2fo's order (a.k.a.
+    # bwd_core's input order).
     extra_signature = f",\n{INDENTATION}".join([
         f"res{i}_seq_ptr" for i in bi2fo if i >= 0
     ])

@@ -45,8 +45,8 @@ def flexsn_forward(
     NCL = x_seq[0].numel()
     BLOCK_NCL = _get_block_size(NCL, x_seq.device.index)
     s_seq = torch.empty_like(x_seq)
-    # Create buffers for extra returns. The filer condition is the same as
-    # get_flexsn_forward_kernel()'s extra_signature.
+    # Create buffers for extra returns. The filer condition is the same as that
+    # of get_flexsn_forward_kernel()'s extra_signature.
     extra_returns = [torch.empty_like(x_seq) for i in bi2fo if i > 0]
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -102,16 +102,20 @@ class FlexSNFunction(autograd.Function):
     ):
         if any(ctx.needs_input_grad):
             results = flexsn_forward(x_seq, fn_fwd, bi2fo)
-            # results: [s_seq, <bi2fo-guided output sequence>]
+            # results: [s_seq, <bi2fo-guided extra returns>]
             s_seq = results[0]
             extra_returns = list(results[1:])
-            # extra_returns does not contain s_seq!!!
+            # extra_returns does not contain s_seq. However, fn_bwd may need
+            # s_seq. Check bi2fo to see if s_seq is required!
             if 0 in bi2fo:
-                # if s_seq is required by backward, insert s_seq into extra_returns.
-                # The first two elements of bi2fo are for grad_s and grad_v. So,
-                # we should minus 2.
+                # Find the position (index) of s_seq in extra_returns and then
+                # insert it to the position. For flexsn, bi2fo follows the
+                # form of [-1, -1, <extra_return_specifier>], where the first
+                # two "-1"s are for grad_s and grad_v. Hence, we should minus
+                # the index by 2.
                 idx = bi2fo.index(0) - 2
                 extra_returns.insert(idx, s_seq)
+            # The order of extra_returns satisfies the requirements of fn_bwd!
             ctx.save_for_backward(*extra_returns)
             ctx.fn_bwd = fn_bwd
         else:

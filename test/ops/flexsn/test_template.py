@@ -24,8 +24,7 @@ def lif_core_generator(beta):
     def lif_core(x: torch.Tensor, v: torch.Tensor):
         h = v*beta + x
         s = spike_fn(h - 1.)
-        v = h * (1.-s)
-        # v = h * s
+        v = h * (1. - s.detach())
         return s, v
 
     return lif_core
@@ -82,6 +81,7 @@ def test_flexsn_forward_backward(beta, shape, dtype):
         core_str, core_name, bi2fo=bi2fo, verbose=True
     )
 
+    # prepare backward core
     core_str, core_name = torch2triton.generate_triton_code_str(
         bwd_graph, core.__name__ + "_backward", verbose=True
     )
@@ -92,7 +92,8 @@ def test_flexsn_forward_backward(beta, shape, dtype):
     s = flexsn.FlexSNFunction.apply(x1, bi2fo, f_inf, f_fwd, f_bwd)
     s.backward(gs)
 
-    ss = lif.MultistepLIFHardNotDetachedFunction.apply(x2, beta)
+    # handwritten LIF kernel
+    ss = lif.MultistepLIFHardDetachedFunction.apply(x2, beta)
     ss.backward(gs)
 
     assert_close(s, ss, prefix="spike")

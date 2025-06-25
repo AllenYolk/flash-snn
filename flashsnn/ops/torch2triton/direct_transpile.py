@@ -44,6 +44,8 @@ FX_TO_TRITON = {
         lambda args: f"tl.sigmoid({_uw(args[0])})",
     "spike_fn":
         lambda args: f"({_uw(args[0])} >= 0.).to({_uw(args[0])}.dtype)",
+    "detach":
+        lambda args: f"{_uw(args[0])}",
     # backward
     "p_add_1":
         lambda args: f"{_uw(args[0])}",
@@ -68,6 +70,8 @@ FX_TO_TRITON = {
             f"tl.fma({PI}*{_uw(args[1])}, {PI}*{_uw(args[1])}, 1.))"
             f".to({_uw(args[1])}.dtype)"
         ),
+    "p_detach":
+        lambda args: f"tl.zeros_like({_uw(args[0])})",
 }
 
 INDENTATION = " " * 4  # four spaces

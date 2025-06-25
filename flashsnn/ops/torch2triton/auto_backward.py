@@ -50,7 +50,19 @@ BACKWARD_RULES = {
         lambda node: (
             ("p_spike_fn", [_uw(node.args[0])]),  # dx = dz * spike_fn(x)
         ),
+    "detach":
+        lambda node: (("p_detach", []),)
 }
+
+
+def graph_returns(graph: fx.Graph):
+    """A generator yielding the return values of the given fx.Graph."""
+    for node in graph.find_nodes(op="output"):
+        output_args = node.args[0]
+        if isinstance(output_args, fx.Node):
+            output_args = (output_args,)
+        for output_arg in output_args:
+            yield output_arg
 
 
 def generate_backward_fx_graph(
@@ -78,17 +90,12 @@ def generate_backward_fx_graph(
 
     grad_nodes = {}  # forward node name -> gradient fx.Node in backward graph
     forward_returns = {}  # forward ret. val. name -> fx.Node in forward graph
-    for node in forward_graph.nodes:
-        if node.op == "output":  # create placeholders for grad_output(s)
-            output_args = node.args[0]
-            if isinstance(output_args, fx.Node):
-                output_args = (output_args,)
-            for output_arg in output_args:  # fx.Node
-                grad_node = backward_graph.placeholder(
-                    f"grad_{output_arg.name}_", type_expr=output_arg.type
-                )
-                grad_nodes[output_arg.name] = grad_node
-                forward_returns[output_arg.name] = output_arg
+    for ret_val in graph_returns(forward_graph):
+        grad_node = backward_graph.placeholder(
+            f"grad_{ret_val.name}_", type_expr=ret_val.type
+        )
+        grad_nodes[ret_val.name] = grad_node
+        forward_returns[ret_val.name] = ret_val
 
     saved_results = {}  # forward node name -> saved Node in backward graph
     saved_results_forward = {}  # forward node name -> saved Node in fwd graph
@@ -192,6 +199,7 @@ def generate_backward_fx_graph(
     forward_graph.erase_node(forward_graph.find_nodes(op="output")[0])
     forward_graph.output(full_forward_returns)
 
+    # forward_graph's output is compact: no repeated / useless outputs!
     return forward_graph, backward_graph
 
 
@@ -249,20 +257,20 @@ def get_bi2fo(
     bwd_graph: fx.Graph,
     verbose: bool = False,
 ) -> List[int]:
-    """bi2fo is a data structure that specifies the mapping between backward
-    kernel's input and forward kernel's output.
+    """bi2fo stands for "backward input to forward output". It is a data 
+    structure that maps the backward kernel's inputs to the forward kernel's 
+    outputs.
 
     bi2fo[i] = j means that the i-th input of bwd_graph is the j-th output of 
     fwd_graph. if j==-1, the i-th input of bwd_graph cannot be found in 
     fwd_graph's outputs.
+
+    This data structure is used in autograd.Function to correctly pass the
+    saved intermediate results into the backward kernel.
     """
     fwd_outputs = []
-    for n in fwd_graph.find_nodes(op="output"):
-        for a in n.args[0]:
-            if isinstance(a, fx.Node):
-                a = (a,)
-            for p in a:
-                fwd_outputs.append(p.name)
+    for ret_val in graph_returns(fwd_graph):
+        fwd_outputs.append(ret_val.name)
 
     bwd_inputs = [
         input.name for input in bwd_graph.find_nodes(op="placeholder")
@@ -276,5 +284,5 @@ def get_bi2fo(
                 idx = i
         bi2fo.append(idx)
     if verbose:
-        print("bi2fo: ", bi2fo)
+        print(f"bi2fo={bi2fo}")
     return bi2fo
