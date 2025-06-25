@@ -8,6 +8,14 @@ INDENTATION = " " * 4
 
 inference_template = """{core_str}
 
+@triton.autotune(
+    configs=[
+        triton.Config({{}}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
+)
 @triton.jit
 def flexsn_inference_kernel_{hash}(
     x_seq_ptr,  # [T, NCL]
@@ -66,6 +74,14 @@ def get_flexsn_inference_kernel(
 
 forward_template = """{core_str}
 
+@triton.autotune(
+    configs=[
+        triton.Config({{}}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
+)
 @triton.jit
 def flexsn_forward_kernel_{hash}(
     x_seq_ptr,  # [T, NCL]
@@ -167,6 +183,14 @@ def get_flexsn_forward_kernel(
 
 backward_template = """{core_str}
 
+@triton.autotune(
+    configs=[
+        triton.Config({{}}, num_warps=w, num_stages=s)
+        for w in [2, 4, 8]
+        for s in [2, 3, 4]
+    ],
+    key=["T", "BLOCK_NCL", "dtype"],
+)
 @triton.jit
 def flexsn_backward_kernel_{hash}(
     grad_s_seq_ptr,
