@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from flashsnn import torch2triton
-from flashsnn.ops import surrogate_kernels, lif
+from flashsnn.ops import surrogate_kernels, lif, spike_fn
 from flashsnn.utils import assert_close, type_dict
 
 SHAPE_LIST = [(4, 3, 3, 224, 224), (17, 5, 700)]
@@ -61,11 +61,6 @@ def test_sigmoid_sg_torch2triton(shape, dtype):
     )
     sg2 = sg_high_level_kernel_wrapper(x, sigmoid_surrogate_t2t)
     assert_close(sg1, sg2, prefix="sg_sigmoid")
-
-
-@torch.fx.wrap
-def spike_fn(h):
-    return (h >= 0.).to(h.dtype)
 
 
 def lif_core(x: torch.Tensor, v: torch.Tensor, beta: torch.Tensor):

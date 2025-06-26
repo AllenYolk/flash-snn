@@ -44,7 +44,7 @@ FX_TO_TRITON = {
         lambda args: f"tl.sigmoid({_uw(args[0])})",
     "spike_fn":
         lambda args: f"({_uw(args[0])} >= 0.).to({_uw(args[0])}.dtype)",
-    "detach":
+    "detach": # do not need to define "p_detach"; skip node generation instead
         lambda args: f"{_uw(args[0])}",
     # backward
     "p_add_1":
@@ -70,8 +70,6 @@ FX_TO_TRITON = {
             f"tl.fma({PI}*{_uw(args[1])}, {PI}*{_uw(args[1])}, 1.))"
             f".to({_uw(args[1])}.dtype)"
         ),
-    "p_detach":
-        lambda args: f"tl.zeros_like({_uw(args[0])})",
 }
 
 INDENTATION = " " * 4  # four spaces
@@ -107,10 +105,13 @@ def generate_triton_code_str(
         if node.op == "placeholder":
             inputs.append(node.name)
         elif node.op in ["call_function", "call_method"]:
+            # For registered custom ops, node.target or node.target.__name__
+            # yields "op_name.default" or something like that. Erase the postfix
+            # using `split(".")[0]`.
             op_name = (
                 node.target.__name__
                 if node.op == "call_function" else node.target
-            )
+            ).split(".")[0]
             if op_name in FX_TO_TRITON:
                 rhs = FX_TO_TRITON[op_name](node.args)
                 triton_code_lines.append(f"{node.name} = {rhs}")

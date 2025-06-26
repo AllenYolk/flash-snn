@@ -17,7 +17,7 @@ def _uw(arg):
 # key: forward operator name
 # value: Callable node -> tuple
 #   - node: the forward node *args -> z
-#   - returns a sequence of tuples (grad_op_name, *args)
+#   - returns a sequence of tuples (grad_op_name, *args); one for each operator
 #     - grad_op_name: the name of the gradient operation
 #     - *args: the saved results required by the gradient operation,
 #       expressed as the keys of the dict `saved_results`.
@@ -51,7 +51,7 @@ BACKWARD_RULES = {
             ("p_spike_fn", [_uw(node.args[0])]),  # dx = dz * spike_fn(x)
         ),
     "detach":
-        lambda node: (("p_detach", []),)
+        lambda node: (("0", []),)
 }
 
 
@@ -119,9 +119,12 @@ def generate_backward_fx_graph(
             continue
 
         # op_name(*args) -> z
+        # For registered custom ops, node.target or node.target.__name__
+        # yields "op_name.default" or something like that. Erase the postfix
+        # using `split(".")[0]`.
         op_name = (
             node.target.__name__ if node.op == "call_function" else node.target
-        )
+        ).split(".")[0]
         if op_name not in BACKWARD_RULES:
             raise NotImplementedError(
                 f"Backward rule for {op_name} has not yet been not implemented."
@@ -135,7 +138,7 @@ def generate_backward_fx_graph(
 
         grad_ops_and_args = BACKWARD_RULES[op_name](node)
 
-        for i, arg in enumerate(node.args):
+        for i, arg in enumerate(node.args):  # for each operator
             if not isinstance(arg, fx.Node):
                 continue
             grad_op, grad_args = grad_ops_and_args[i]

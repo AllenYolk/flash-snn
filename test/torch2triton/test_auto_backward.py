@@ -6,11 +6,7 @@ import torch
 import torch.fx as fx
 
 from flashsnn import torch2triton
-
-
-@torch.fx.wrap
-def spike_fn(h):
-    return (h >= 0.).to(h.dtype)
+from flashsnn.ops import spike_fn
 
 
 def lif_core_generator(beta):

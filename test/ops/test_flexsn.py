@@ -6,18 +6,13 @@ sys.path.append("./")
 import torch
 
 from flashsnn import torch2triton
-from flashsnn.ops import flexsn
+from flashsnn.ops import flexsn, spike_fn
 from flashsnn.ops import lif
 from flashsnn.utils import assert_close
 
 BETA_LIST = [0.5, 0.1, 0.9]
 SHAPE_LIST = [(4, 5, 3, 224, 224), (11, 7, 700)]
 DTYPE_LIST = [torch.float32, torch.float16]
-
-
-@torch.fx.wrap
-def spike_fn(h):
-    return (h >= 0.).to(h.dtype)
 
 
 def lif_core_generator(beta):
