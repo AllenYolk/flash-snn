@@ -7,26 +7,20 @@ import torch.nn as nn
 import triton
 from spikingjelly.activation_based import surrogate, neuron, functional
 
-from flashsnn.ops import lif
+from flashsnn.ops import lif, spike_fn, flexsn
+from flashsnn import torch2triton
 
 DEVICE = "cuda"
 DTYPE = torch.float32
 QUANTILES = [0.5, 0.2, 0.8]
-DETACH_RESET = True
-SOFT_RESET = False
 
 
 class VanillaLIF(nn.Module):
 
-    def __init__(
-        self, beta: float, detach_reset: bool, soft_reset: bool,
-        dtype: torch.dtype
-    ):
+    def __init__(self, beta: float, dtype: torch.dtype):
         super().__init__()
         self.beta = torch.tensor(beta).to(dtype)
-        self.detach_reset = detach_reset
         self.sg = surrogate.ATan()
-        self.soft_reset = soft_reset
 
     def forward(self, x_seq: torch.Tensor):
         v = torch.zeros_like(x_seq[0])
@@ -34,16 +28,7 @@ class VanillaLIF(nn.Module):
         for t in range(x_seq.shape[0]):
             v = self.beta * v + x_seq[t]
             s = self.sg(v - 1.)
-            if self.soft_reset:
-                if self.detach_reset:
-                    v = v - s.detach()
-                else:
-                    v = v - s
-            else:
-                if self.detach_reset:
-                    v = v * (1. - s.detach())
-                else:
-                    v = v * (1.-s)
+            v = v * (1. - s.detach())
             s_seq[t] = s
         return s_seq
 
@@ -59,18 +44,15 @@ class SJLIF(neuron.LIFNode):
         return y
 
 
-def get_lif_autograd_function(detach_reset: bool, soft_reset: bool):
-    if soft_reset:
-        s2 = "Soft"
-    else:
-        s2 = "Hard"
+def get_lif_autograd_function():
+    return getattr(lif, f"MultistepLIFHardDetachedFunction").apply
 
-    if detach_reset:
-        s3 = "Detached"
-    else:
-        s3 = "NotDetached"
 
-    return getattr(lif, f"MultistepLIF{s2}{s3}Function").apply
+def lif_core(x: torch.Tensor, v: torch.Tensor):
+    h = v*0.5 + x
+    s = spike_fn(h - 1.)
+    v = h * (1. - s.detach())
+    return s, v
 
 
 @triton.testing.perf_report([
@@ -83,14 +65,31 @@ def get_lif_autograd_function(detach_reset: bool, soft_reset: bool):
         line_arg='neuron_type',
         # possible values for `line_arg``
         line_vals=[
-            'torch', 'spikingjelly-cupy', 'spikingjelly-torch', 'triton'
+            'torch',
+            'torch-compile',
+            'spikingjelly-cupy',
+            'spikingjelly-torch',
+            'triton',
+            'triton-flexsn',
         ],
         # label name for the lines
         line_names=[
-            'Torch', 'SpikingJelly (CuPy)', 'SpikingJelly (Torch)', 'Triton'
+            'Torch',
+            'Torch (compile)',
+            'SpikingJelly (CuPy)',
+            'SpikingJelly (Torch)',
+            'Triton',
+            'Triton (flexsn)',
         ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('cyan', '-.'),
+            ('orange', ':'),
+            ('red', '-'),
+            ('red', "--"),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (NCL=8*700)",
@@ -105,14 +104,31 @@ def get_lif_autograd_function(detach_reset: bool, soft_reset: bool):
         line_arg='neuron_type',
         # possible values for `line_arg``
         line_vals=[
-            'torch', "spikingjelly-cupy", 'spikingjelly-torch', 'triton'
+            'torch',
+            'torch-compile',
+            'spikingjelly-cupy',
+            'spikingjelly-torch',
+            'triton',
+            'triton-flexsn',
         ],
         # label name for the lines
         line_names=[
-            'Torch', 'SpikingJelly (CuPy)', 'SpikingJelly (Torch)', 'Triton'
+            'Torch',
+            'Torch (compile)',
+            'SpikingJelly (CuPy)',
+            'SpikingJelly (Torch)',
+            'Triton',
+            'Triton (flexsn)',
         ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('cyan', '-.'),
+            ('orange', ':'),
+            ('red', '-'),
+            ('red', "--"),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (T=4)",
@@ -126,28 +142,61 @@ def bacnmark(T, NCL, neuron_type):
 
     results = 0, 0, 0
     if neuron_type == "torch":
-        f = VanillaLIF(
-            beta=0.5,
-            detach_reset=DETACH_RESET,
-            soft_reset=SOFT_RESET,
-            dtype=DTYPE
-        ).to(DEVICE)
+        f = VanillaLIF(beta=0.5, dtype=DTYPE).to(DEVICE)
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
+        )
+    if neuron_type == "torch-compile":
+        f = torch.compile(
+            VanillaLIF(beta=0.5, dtype=DTYPE).to(DEVICE), backend="inductor"
+        )
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
     elif neuron_type == "triton":
-        f = get_lif_autograd_function(
-            detach_reset=DETACH_RESET, soft_reset=SOFT_RESET
-        )
+        f = get_lif_autograd_function()
         results = triton.testing.do_bench(
             lambda: f(x, 0.5).backward(grad_y), quantiles=QUANTILES
+        )
+    elif neuron_type == "triton-flexsn":
+        core = lif_core
+
+        # prepare inference core
+        core_str, core_name = torch2triton.generate_triton_code_str(core)
+        f_inf = flexsn.get_flexsn_inference_kernel(core_str, core_name)
+
+        # prepare forward core
+        fwd_graph, bwd_graph = torch2triton.generate_backward_fx_graph(
+            core, requires_grad=(True, True)
+        )
+        bi2fo = torch2triton.get_bi2fo(fwd_graph, bwd_graph)
+
+        core_str, core_name = torch2triton.generate_triton_code_str(
+            fwd_graph, core.__name__ + "_forward"
+        )
+        f_fwd = flexsn.get_flexsn_forward_kernel(
+            core_str, core_name, bi2fo=bi2fo
+        )
+
+        # prepare backward core
+        core_str, core_name = torch2triton.generate_triton_code_str(
+            bwd_graph, core.__name__ + "_backward"
+        )
+        f_bwd = flexsn.get_flexsn_backward_kernel(
+            core_str, core_name, bi2fo=bi2fo
+        )
+
+        f = flexsn.FlexSNFunction.apply
+        results = triton.testing.do_bench(
+            lambda: f(x, bi2fo, f_inf, f_fwd, f_bwd).backward(grad_y),
+            quantiles=QUANTILES
         )
     elif neuron_type == "spikingjelly-cupy":
         f = SJLIF(
             tau=2.,
             decay_input=False,
             surrogate_function=surrogate.ATan(),
-            detach_reset=DETACH_RESET,
+            detach_reset=True,
             step_mode="m",
             backend="cupy"
         ).to(DEVICE)
@@ -159,7 +208,7 @@ def bacnmark(T, NCL, neuron_type):
             tau=2.,
             decay_input=False,
             surrogate_function=surrogate.ATan(),
-            detach_reset=DETACH_RESET,
+            detach_reset=True,
             step_mode="m",
             backend="torch"
         ).to(DEVICE)

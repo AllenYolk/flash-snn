@@ -12,36 +12,19 @@ from flashsnn.ops import plif
 DEVICE = "cuda"
 DTYPE = torch.float32
 QUANTILES = [0.5, 0.2, 0.8]
-DETACH_RESET = True
-SOFT_RESET = False
 
 
-def get_plif_autograd_function(detach_reset: bool, soft_reset: bool):
-    if soft_reset:
-        s2 = "Soft"
-    else:
-        s2 = "Hard"
-
-    if detach_reset:
-        s3 = "Detached"
-    else:
-        s3 = "NotDetached"
-
-    return getattr(plif, f"MultistepPLIF{s2}{s3}Function").apply
+def get_plif_autograd_function():
+    return getattr(plif, f"MultistepPLIFHardDetachedFunction").apply
 
 
 class VanillaPLIF(nn.Module):
 
-    def __init__(
-        self, beta_init: float, detach_reset: bool, soft_reset: bool,
-        dtype: torch.dtype
-    ):
+    def __init__(self, beta_init: float, dtype: torch.dtype):
         super().__init__()
         self._beta = nn.Parameter(torch.tensor(beta_init).to(dtype))
         self.one = torch.tensor(1.).to(dtype)
-        self.detach_reset = detach_reset
         self.sg = surrogate.ATan()
-        self.soft_reset = soft_reset
         self.dtype = dtype
 
     @property
@@ -54,16 +37,7 @@ class VanillaPLIF(nn.Module):
         for t in range(x_seq.shape[0]):
             v = self.beta * v + x_seq[t]
             s = self.sg(v - self.one)
-            if self.soft_reset:
-                if self.detach_reset:
-                    v = v - s.detach()
-                else:
-                    v = v - s
-            else:
-                if self.detach_reset:
-                    v = v * (self.one - s.detach())
-                else:
-                    v = v * (self.one - s)
+            v = v * (self.one - s.detach())
             s_seq[t] = s
         return s_seq
 
@@ -89,14 +63,29 @@ class SJPLIF(neuron.ParametricLIFNode):
         line_arg='neuron_type',
         # possible values for `line_arg``
         line_vals=[
-            'torch', 'spikingjelly-cupy', 'spikingjelly-torch', 'triton'
+            'torch',
+            'torch-compile',
+            'spikingjelly-cupy',
+            'spikingjelly-torch',
+            'triton',
         ],
         # label name for the lines
         line_names=[
-            'Torch', 'SpikingJelly (CuPy)', 'SpikingJelly (Torch)', 'Triton'
+            'Torch',
+            'Torch (compile)',
+            'SpikingJelly (CuPy)',
+            'SpikingJelly (Torch)',
+            'Triton',
         ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('cyan', '-.'),
+            ('orange', ':'),
+            ('red', '-'),
+            ('red', "--"),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (NCL=8*700)",
@@ -111,14 +100,29 @@ class SJPLIF(neuron.ParametricLIFNode):
         line_arg='neuron_type',
         # possible values for `line_arg``
         line_vals=[
-            'torch', "spikingjelly-cupy", 'spikingjelly-torch', 'triton'
+            'torch',
+            'torch-compile',
+            'spikingjelly-cupy',
+            'spikingjelly-torch',
+            'triton',
         ],
         # label name for the lines
         line_names=[
-            'Torch', 'SpikingJelly (CuPy)', 'SpikingJelly (Torch)', 'Triton'
+            'Torch',
+            'Torch (compile)',
+            'SpikingJelly (CuPy)',
+            'SpikingJelly (Torch)',
+            'Triton',
         ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('cyan', '-.'),
+            ('orange', ':'),
+            ('red', '-'),
+            ('red', "--"),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (T=4)",
@@ -132,24 +136,25 @@ def bacnmark(T, NCL, neuron_type):
 
     results = 0, 0, 0
     if neuron_type == "torch":
-        f = VanillaPLIF(
-            beta_init=0.5,
-            detach_reset=DETACH_RESET,
-            soft_reset=SOFT_RESET,
-            dtype=DTYPE
-        ).to(DEVICE)
+        f = VanillaPLIF(beta_init=0.5, dtype=DTYPE).to(DEVICE)
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
+        )
+    elif neuron_type == "torch-compile":
+        f = torch.compile(
+            VanillaPLIF(beta_init=0.5, dtype=DTYPE).to(DEVICE),
+            backend="inductor"
+        )
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
     elif neuron_type == "triton":
-        f = get_plif_autograd_function(
-            detach_reset=DETACH_RESET, soft_reset=SOFT_RESET
-        )
+        f = get_plif_autograd_function()
         beta = torch.tensor(0.5, device=DEVICE, dtype=DTYPE, requires_grad=True)
         results = triton.testing.do_bench(
             lambda: f(
                 x,
-                torch.sigmoid(beta).expand(x.shape),
+                beta.expand(x.shape),
             ).backward(grad_y),
             quantiles=QUANTILES
         )
@@ -158,7 +163,7 @@ def bacnmark(T, NCL, neuron_type):
             init_tau=2.,
             decay_input=False,
             surrogate_function=surrogate.ATan(),
-            detach_reset=DETACH_RESET,
+            detach_reset=True,
             step_mode="m",
             backend="cupy"
         ).to(DEVICE)
@@ -170,7 +175,7 @@ def bacnmark(T, NCL, neuron_type):
             init_tau=2.,
             decay_input=False,
             surrogate_function=surrogate.ATan(),
-            detach_reset=DETACH_RESET,
+            detach_reset=True,
             step_mode="m",
             backend="torch"
         ).to(DEVICE)

@@ -5,7 +5,6 @@ import torch
 from torch import autograd
 import triton
 import triton.language as tl
-from spikingjelly.activation_based import surrogate
 
 from flashsnn.ops import surrogate_kernels
 from flashsnn.utils import get_multiprocessor_count, type_dict
@@ -77,8 +76,12 @@ def _psn_inference_kernel(
     bias = tl.load(bias_ptrs, boundary_check=(0,), padding_option="zero")
 
     h_seq = tl.dot(
-        weight, x_seq, out_dtype=dtype, input_precision="ieee"
-    ) - bias
+        weight,
+        x_seq,
+        acc=bias.broadcast_to(BLOCK_T, BLOCK_NCL),
+        out_dtype=dtype,
+        input_precision="ieee"
+    )
     s_seq = (h_seq >= 0.).to(dtype)
 
     s_ptrs = tl.make_block_ptr(
@@ -145,8 +148,12 @@ def _psn_forward_kernel(
     bias = tl.load(bias_ptrs, boundary_check=(0,), padding_option="zero")
 
     h_seq = tl.dot(
-        weight, x_seq, out_dtype=dtype, input_precision="ieee"
-    ) - bias
+        weight,
+        x_seq,
+        acc=bias.broadcast_to(BLOCK_T, BLOCK_NCL),
+        out_dtype=dtype,
+        input_precision="ieee"
+    )
     s_seq = (h_seq >= 0.).to(dtype)
 
     s_ptrs = tl.make_block_ptr(
@@ -237,7 +244,7 @@ def _psn_backward_kernel_with_atomic(
     grad_weight = tl.dot(
         grad_h_seq, tl.trans(x_seq), out_dtype=dtype, input_precision="ieee"
     )
-    grad_bias = -tl.sum(grad_h_seq, axis=1, keep_dims=True)
+    grad_bias = tl.sum(grad_h_seq, axis=1, keep_dims=True)
 
     grad_x_seq_ptrs = tl.make_block_ptr(
         grad_x_seq_ptr,
@@ -339,7 +346,7 @@ def _psn_backward_kernel_without_atomic(
     grad_weight = tl.dot(
         grad_h_seq, tl.trans(x_seq), out_dtype=dtype, input_precision="ieee"
     ).expand_dims(0)
-    grad_bias = -tl.sum(grad_h_seq, axis=1, keep_dims=True).expand_dims(0)
+    grad_bias = tl.sum(grad_h_seq, axis=1, keep_dims=True).expand_dims(0)
 
     grad_x_seq_ptrs = tl.make_block_ptr(
         grad_x_seq_ptr,
@@ -550,13 +557,3 @@ class PSNFunction(autograd.Function):
             grad_s_seq, weight, h_seq, x_seq, ctx.sg_fn
         )
         return grad_x_seq, grad_weight, grad_bias
-
-
-class PSNTorchJITFunction:
-    """"autograd.Function-like interface"""
-
-    @torch.jit.script
-    def apply(x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
-        h_seq = torch.addmm(-bias, weight, x_seq.flatten(1))
-        s_seq = surrogate.atan.apply(h_seq, 2.)
-        return s_seq.view(x_seq.shape)

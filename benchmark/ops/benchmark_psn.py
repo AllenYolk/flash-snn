@@ -16,11 +16,7 @@ QUANTILES = [0.5, 0.2, 0.8]
 
 
 def get_psn_function(neuron_type):
-    if neuron_type == "triton":
-        s2 = ""
-    elif neuron_type == "torch_jit":
-        s2 = "TorchJIT"
-    return getattr(psn, f"PSN{s2}Function").apply
+    return getattr(psn, f"PSNFunction").apply
 
 
 class VanillaPSN(nn.Module):
@@ -38,11 +34,11 @@ class VanillaPSN(nn.Module):
         self.bias = nn.Parameter(bias)
 
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        nn.init.constant_(self.bias, 1.)
+        nn.init.constant_(self.bias, -1.)
 
     def forward(self, x_seq: torch.Tensor):
         # x_seq.shape = [T, N, *]
-        h_seq = torch.addmm(-self.bias, self.weight, x_seq.flatten(1))
+        h_seq = torch.addmm(self.bias, self.weight, x_seq.flatten(1))
         spike_seq = self.surrogate_function(h_seq)
         return spike_seq.view(x_seq.shape)
 
@@ -63,15 +59,31 @@ class SJPSN(neuron.PSN):
         # argument names to use as an x-axis for the plot
         x_names=['T'],
         # different possible values for `x_name`
-        x_vals=[4 * i for i in range(1, 5)],
+        x_vals=[4 * i for i in range(1, 17)],
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['torch', 'spikingjelly', 'triton'],
+        line_vals=[
+            'torch',
+            #'torch-compile',
+            'spikingjelly',
+            'triton',
+        ],
         # label name for the lines
-        line_names=['Torch', 'SpikingJelly', 'Triton'],
+        line_names=[
+            'Torch',
+            #'Torch (compile)',
+            'SpikingJelly',
+            'Triton',
+        ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('cyan', '-.'),
+            ('red', '-'),
+            ('red', "--"),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (NCL=8*700)",
@@ -85,15 +97,31 @@ class SJPSN(neuron.PSN):
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['torch', "spikingjelly", 'triton'],
+        line_vals=[
+            'torch',
+            #'torch-compile',
+            'spikingjelly',
+            'triton',
+        ],
         # label name for the lines
-        line_names=['Torch', 'SpikingJelly', 'Triton'],
+        line_names=[
+            'Torch',
+            #'Torch (compile)',
+            'SpikingJelly',
+            'Triton',
+        ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('orange', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('cyan', '-.'),
+            ('red', '-'),
+            ('red', "--"),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
-        plot_name="Performance (T=4)",
-        args={"T": 4},
+        plot_name="Performance (T=16)",
+        args={"T": 16},
     ),
 ])
 def bacnmark(T, NCL, neuron_type):
@@ -107,7 +135,14 @@ def bacnmark(T, NCL, neuron_type):
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
-    elif neuron_type in ["triton", "torch_jit"]:  # function-style
+    elif neuron_type == "torch-compile":  # module-style
+        f = torch.compile(
+            VanillaPSN(T, dtype=DTYPE).to(DEVICE), backend="inductor"
+        )
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
+        )
+    elif neuron_type == "triton":  # function-style
         f = get_psn_function(neuron_type=neuron_type)
         weight = torch.randn(
             [T, T],

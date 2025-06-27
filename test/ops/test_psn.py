@@ -11,19 +11,14 @@ from spikingjelly.activation_based import surrogate
 from flashsnn.ops import psn
 from flashsnn.utils import assert_close
 
-BACKEND_LIST = ["triton", "torch"]
-INPUT_SHAPE_LIST = [(4, 32, 3, 224, 224), (5, 4, 700)]
+INPUT_SHAPE_LIST = [(4, 32, 3, 224, 224), (17, 4, 700)]
 DTYPE_LIST = [torch.float32, torch.float16]
 
 torch.manual_seed(2025)
 
 
-def get_psn_autograd_function(backend):
-    if backend == "triton":
-        s2 = ""
-    else:
-        s2 = "TorchJIT"
-    return getattr(psn, f"PSN{s2}Function").apply
+def get_psn_autograd_function():
+    return getattr(psn, f"PSNFunction").apply
 
 
 class VanillaPSN(nn.Module):
@@ -41,19 +36,18 @@ class VanillaPSN(nn.Module):
         self.bias = nn.Parameter(bias)
 
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        nn.init.constant_(self.bias, 1.)
+        nn.init.constant_(self.bias, -1.)
 
     def forward(self, x_seq: torch.Tensor):
         # x_seq.shape = [T, N, *]
-        h_seq = torch.addmm(-self.bias, self.weight, x_seq.flatten(1))
+        h_seq = torch.addmm(self.bias, self.weight, x_seq.flatten(1))
         spike_seq = self.surrogate_function(h_seq)
         return spike_seq.view(x_seq.shape)
 
 
 @pytest.mark.parametrize("input_shape", INPUT_SHAPE_LIST)
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
-@pytest.mark.parametrize("backend", BACKEND_LIST)
-def test_lif_ops(input_shape, dtype, backend):
+def test_lif_ops(input_shape, dtype):
     x_seq_1 = torch.randn(input_shape, device="cuda", dtype=dtype)
     x_seq_2 = x_seq_1.clone().detach()
     x_seq_1.requires_grad = True
@@ -69,7 +63,7 @@ def test_lif_ops(input_shape, dtype, backend):
     y1 = f1(x_seq_1)
     y1.backward(grad_y_1)
 
-    f2 = get_psn_autograd_function(backend)
+    f2 = get_psn_autograd_function()
     y2 = f2(x_seq_2, weight2, bias2)
     y2.backward(grad_y_2)
 
