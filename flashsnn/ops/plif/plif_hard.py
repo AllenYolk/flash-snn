@@ -21,6 +21,18 @@ def _get_block_size(NCL, device_idx):
     return BLOCK_NCL
 
 
+@triton.jit
+def _sigmoid_forward(x, dtype: tl.constexpr):
+    return tl.sigmoid(x.to(tl.float32)).to(dtype)
+
+
+@triton.jit
+def _sigmoid_backward(y):
+    # y = sigmoid(x)
+    y = y * (1.-y)
+    return y
+
+
 @triton.autotune(
     configs=[
         triton.Config({}, num_warps=w, num_stages=s)
@@ -32,7 +44,7 @@ def _get_block_size(NCL, device_idx):
 @triton.jit
 def _multistep_plif_hard_inference_kernel(
     x_seq_ptr,  # [T, NCL]
-    beta_seq_ptr,  # [T, NCL], after applying sigmoid
+    beta_seq_ptr,  # [T, NCL], before applying sigmoid
     s_seq_ptr,
     T: tl.constexpr,
     NCL: tl.constexpr,
@@ -63,6 +75,7 @@ def _multistep_plif_hard_inference_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
+        beta = _sigmoid_forward(beta, dtype)
 
         h = tl.fma(beta, v, x)  # decay_input = False
         s = (h >= 1.).to(dtype)  # v_th = 1
@@ -90,7 +103,7 @@ def _multistep_plif_hard_inference_kernel(
 @triton.jit
 def _multistep_plif_hard_forward_kernel(
     x_seq_ptr,  # [T, NCL]
-    beta_seq_ptr,  # [T, NCL], after applying sigmoid
+    beta_seq_ptr,  # [T, NCL], before applying sigmoid
     s_seq_ptr,
     h_seq_ptr,
     v_seq_ptr,
@@ -123,6 +136,7 @@ def _multistep_plif_hard_forward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
+        beta = _sigmoid_forward(beta, dtype)
 
         h = tl.fma(beta, v, x)
         s = (h >= 1.).to(dtype)  # v_th = 1
@@ -168,7 +182,7 @@ def _multistep_plif_hard_forward_kernel(
 @triton.jit
 def _multistep_plif_hard_not_detached_backward_kernel(
     grad_s_seq_ptr,
-    beta_seq_ptr,
+    beta_seq_ptr,  # before applying sigmoid
     h_seq_ptr,
     v_seq_ptr,
     s_seq_ptr,
@@ -235,6 +249,7 @@ def _multistep_plif_hard_not_detached_backward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
+        beta = _sigmoid_forward(beta, dtype)
 
         sg = sg_fn(h - 1., dtype)
         # grad_v = (grad_s - grad_v*h) * sg + grad_v * (one-s)
@@ -250,7 +265,7 @@ def _multistep_plif_hard_not_detached_backward_kernel(
         )
         tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
 
-        grad_beta = grad_v * v_last
+        grad_beta = grad_v * v_last * _sigmoid_backward(beta)
         grad_beta_ptrs = tl.make_block_ptr(
             grad_beta_seq_ptr,
             shape=(T, NCL),
@@ -275,7 +290,7 @@ def _multistep_plif_hard_not_detached_backward_kernel(
 @triton.jit
 def _multistep_plif_hard_detached_backward_kernel(
     grad_s_seq_ptr,
-    beta_seq_ptr,
+    beta_seq_ptr,  # before applying sigmoid
     h_seq_ptr,
     v_seq_ptr,
     s_seq_ptr,
@@ -342,6 +357,7 @@ def _multistep_plif_hard_detached_backward_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
+        beta = _sigmoid_forward(beta, dtype)
 
         sg = sg_fn(h - 1., dtype)
         # grad_v = grad_s*sg + grad_v * (one-s)
@@ -357,7 +373,7 @@ def _multistep_plif_hard_detached_backward_kernel(
         )
         tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
 
-        grad_beta = grad_v * v_last
+        grad_beta = grad_v * v_last * _sigmoid_backward(beta)
         grad_beta_ptrs = tl.make_block_ptr(
             grad_beta_seq_ptr,
             shape=(T, NCL),
