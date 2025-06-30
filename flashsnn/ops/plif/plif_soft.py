@@ -241,7 +241,7 @@ def _multistep_plif_soft_not_detached_backward_kernel(
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
         beta = _sigmoid_forward(beta, dtype)
 
-        sg = sg_fn(h - 1., dtype)
+        sg = sg_fn(h - 1.)
         grad_v = tl.fma(grad_s - grad_v, sg, grad_v)
 
         grad_x_ptrs = tl.make_block_ptr(
@@ -338,7 +338,7 @@ def _multistep_plif_soft_detached_backward_kernel(
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
         beta = _sigmoid_forward(beta, dtype)
 
-        sg = sg_fn(h - 1., dtype)
+        sg = sg_fn(h - 1.)
         grad_v = tl.fma(grad_s, sg, grad_v)
 
         grad_x_ptrs = tl.make_block_ptr(

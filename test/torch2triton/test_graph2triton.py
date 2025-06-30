@@ -46,40 +46,11 @@ def sg_high_level_kernel_wrapper(h: torch.Tensor, op: triton.JITFunction):
     return sg
 
 
-@triton.jit
-def sg_high_level_kernel2(
-    h_ptr, sg_ptr, N, BLOCK_SIZE: tl.constexpr, op: tl.constexpr,
-    dtype: tl.constexpr
-):
-    pid = tl.program_id(axis=0)
-    offsets = pid*BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    h = tl.load(h_ptr + offsets, mask=offsets < N)
-
-    sg = op(h, dtype)
-    tl.store(sg_ptr + offsets, sg, mask=offsets < N)
-
-
-def sg_high_level_kernel_wrapper2(h: torch.Tensor, op: triton.JITFunction):
-    sg = torch.empty_like(h)
-    N = h.numel()
-    BLOCK_SIZE = 256
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
-    sg_high_level_kernel2[grid](
-        h,
-        sg,
-        N,
-        BLOCK_SIZE,
-        op,
-        type_dict[h.dtype],
-    )
-    return sg
-
-
 @pytest.mark.parametrize("shape", SHAPE_LIST)
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
 def test_sigmoid_sg_torch2triton(shape, dtype):
     x = torch.randn(shape, dtype=dtype, device="cuda")
-    sg1 = sg_high_level_kernel_wrapper2(
+    sg1 = sg_high_level_kernel_wrapper(
         x, surrogate_kernels.sigmoid_surrogate_backward
     )
     sigmoid_surrogate_t2t = torch2triton.transpile_triton_code(

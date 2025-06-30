@@ -189,7 +189,7 @@ def _multistep_lif_hard_not_detached_backward_kernel(
         )
         s = tl.load(s_ptrs, boundary_check=(1,), padding_option="zero")
 
-        sg = sg_fn(h - 1., dtype)
+        sg = sg_fn(h - 1.)
         # grad_v = (grad_s - grad_v*h) * sg + grad_v * (one-s)
         grad_v = tl.fma(tl.fma(-grad_v, h, grad_s), sg, grad_v * (1.-s))
 
@@ -263,7 +263,7 @@ def _multistep_lif_hard_detached_backward_kernel(
         )
         s = tl.load(s_ptrs, boundary_check=(1,), padding_option="zero")
 
-        sg = sg_fn(h - 1., dtype)
+        sg = sg_fn(h - 1.)
         # grad_v = grad_s*sg + grad_v * (one-s)
         grad_v = tl.fma(grad_s, sg, grad_v * (1.-s))
 
