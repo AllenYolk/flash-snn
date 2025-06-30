@@ -1,4 +1,4 @@
-from typing import Callable, Tuple, Union, Optional
+from typing import Callable, Tuple
 import tempfile
 from pathlib import Path
 import hashlib
@@ -10,6 +10,7 @@ import triton.language as tl
 
 from flashsnn.utils.dtype import type_str_dict
 from flashsnn.utils.cleanup import ensure_cleanup_tmp_python_files
+from flashsnn.torch2triton.torch2graph import generate_inference_graph
 
 
 def _generate_hash(s: str, w: int = 8) -> str:
@@ -25,77 +26,53 @@ def _uw(arg) -> str:  # unwrap
     return str(arg)
 
 
-PI = 3.14159265358979
-
 # code generation rules
 FX_TO_TRITON = {
-    # forward
     "add":
-        lambda args: f"{_uw(args[0])} + {_uw(args[1])}",
+        lambda args, kwargs: f"{_uw(args[0])} + {_uw(args[1])}",
     "sub":
-        lambda args: f"{_uw(args[0])} - {_uw(args[1])}",
+        lambda args, kwargs: f"{_uw(args[0])} - {_uw(args[1])}",
     "mul":
-        lambda args: f"{_uw(args[0])} * {_uw(args[1])}",
-    "ge":
-        lambda args: f"{_uw(args[0])} >= {_uw(args[1])}",
-    "to":
-        lambda args: f"{_uw(args[0])}.to({_uw(args[1])})",
-    "sigmoid":
-        lambda args: f"tl.sigmoid({_uw(args[0])})",
-    "spike_fn":
-        lambda args: f"({_uw(args[0])} >= 0.).to({_uw(args[0])}.dtype)",
-    "detach": # do not need to define "p_detach"; skip node generation instead
-        lambda args: f"{_uw(args[0])}",
-    # backward
-    "p_add_1":
-        lambda args: f"{_uw(args[0])}",
-    "p_add_2":
-        lambda args: f"{_uw(args[0])}",
-    "p_sub_1":
-        lambda args: f"{_uw(args[0])}",
-    "p_sub_2":
-        lambda args: f"-{_uw(args[0])}",
-    "p_mul_1":
-        lambda args: f"{_uw(args[0])} * {_uw(args[1])}",
-    "p_mul_2":
-        lambda args: f"{_uw(args[0])} * {_uw(args[1])}",
-    "p_sigmoid":
-        lambda args:
-        (f"{_uw(args[0])} * {_uw(args[1])} * (1 - {_uw(args[1])})"),
-    "p_to":
-        lambda args: f"{_uw(args[0])}.to({_uw(args[1])})",
-    "p_spike_fn":
-        lambda args: (
-            f"({_uw(args[0])} / "
-            f"tl.fma({PI}*{_uw(args[1])}, {PI}*{_uw(args[1])}, 1.))"
-            f".to({_uw(args[1])}.dtype)"
-        ),
+        lambda args, kwargs: f"{_uw(args[0])} * {_uw(args[1])}",
+    "add.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} + {_uw(args[1])}",
+    "sub.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} - {_uw(args[1])}",
+    "rsub.Scalar":
+        lambda args, kwargs: f"{_uw(args[1])} - {_uw(args[0])}",
+    "mul.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} * {_uw(args[1])}",
+    "reciprocal.default":
+        lambda args, kwargs: f"1. / {_uw(args[0])}",
+    "spike_fn.default":
+        lambda args, kwargs: f"({_uw(args[0])} >= 0.).to({_uw(args[0])}.dtype)",
+    "detach.default":
+        lambda args, kwargs: f"{_uw(args[0])}",
+    "sigmoid.default":
+        lambda args, kwargs: f"tl.sigmoid({_uw(args[0])})",
+    "_to_copy.default":
+        lambda args, kwargs: f"{_uw(args[0])}.to({_uw(kwargs['dtype'])})",
 }
 
 INDENTATION = " " * 4  # four spaces
 
 
 def generate_triton_code_str(
-    graph: Union[fx.Graph, Callable],
-    fn_name: Optional[str] = None,
+    graph: fx.Graph,
+    fn_name: str,
     verbose: bool = False,
 ) -> Tuple[str, str]:
     """Given a fx.Graph, generate its corresponding Triton code string.
 
     Args:
-        graph (fx.Graph or Callable): if a function is given, convert it to 
-            fx.Graph first.
-        fn_name (str): name of the original PyTorch function. If None and `graph`
-            is a function, `fn_name` will be set to the function name.
+        graph (fx.Graph)
+        fn_name (str): name of the original PyTorch function. 
         verbose (bool, optional): Defaults to False.
 
     Returns:
         Tuple[str, str]: the generated Triton code string and the name of the 
             Triton function.
     """
-    if not isinstance(graph, fx.Graph):
-        fn_name = graph.__name__
-        graph = fx.symbolic_trace(graph).graph
     if verbose:
         print(graph)
 
@@ -105,15 +82,12 @@ def generate_triton_code_str(
         if node.op == "placeholder":
             inputs.append(node.name)
         elif node.op in ["call_function", "call_method"]:
-            # For registered custom ops, node.target or node.target.__name__
-            # yields "op_name.default" or something like that. Erase the postfix
-            # using `split(".")[0]`.
             op_name = (
                 node.target.__name__
                 if node.op == "call_function" else node.target
-            ).split(".")[0]
-            if op_name in FX_TO_TRITON:
-                rhs = FX_TO_TRITON[op_name](node.args)
+            )  # e.g. mul.Tensor, spike_fn.default, rsub.Scalar, ...
+            if op_name in FX_TO_TRITON:  # apply the transpile rule
+                rhs = FX_TO_TRITON[op_name](node.args, node.kwargs)
                 triton_code_lines.append(f"{node.name} = {rhs}")
             else:
                 raise NotImplementedError(
@@ -156,31 +130,27 @@ def compile_triton_code_str(
         if verbose:
             print(f"Triton code `{kernel_name}` written to {fpath}")
 
-    try:
-        name_space.update({
-            "triton": triton,
-            "tl": tl,
-            "__name__": "flashsnn.codegen.triton",  # TODO: any better choice?
-        })
-        with open(fpath, "r") as f:
-            code = compile(f.read(), fpath, "exec")
-            exec(code, name_space)
+    name_space.update({
+        "triton": triton,
+        "tl": tl,
+        "__name__": "flashsnn.codegen.triton",  # TODO: any better choice?
+    })
+    with open(fpath, "r") as f:
+        code = compile(f.read(), fpath, "exec")
+        exec(code, name_space)
 
-        if kernel_name in name_space:
-            return name_space[kernel_name]
-        else:
-            raise ValueError(
-                f"Function {kernel_name} not found in compiled namespace"
-            )
-    finally:
-        # if the temporary file is removed,
-        # triton will raise "source code not found" error
-        # os.remove(fpath)
-        pass
+    if kernel_name in name_space:
+        return name_space[kernel_name]
+    else:
+        raise ValueError(
+            f"Function {kernel_name} not found in compiled namespace"
+        )
 
 
 def transpile_triton_code(
-    fn: Callable, verbose: bool = False
+    fn: Callable,
+    example_inputs: tuple,
+    verbose: bool = False
 ) -> triton.JITFunction:
     """Given a PyTorch function, generate its corresponding Triton JIT function.
 
@@ -189,15 +159,16 @@ def transpile_triton_code(
 
     Args:
         fn (Callable): a PyTorch function.
+        example_inputs (tuple): a tuple of example inputs to the function.
         verbose (bool, optional): If True, print the generated Triton code. 
             Defaults to False.
 
     Returns:
         triton.JITFunction
     """
-    traced = fx.symbolic_trace(fn)
+    graph = generate_inference_graph(fn, example_inputs)
     kernel_str, kernel_name = generate_triton_code_str(
-        traced.graph, fn.__name__, verbose
+        graph, fn.__name__, verbose
     )
     if verbose:
         print("=" * 100)

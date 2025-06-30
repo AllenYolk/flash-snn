@@ -27,9 +27,9 @@ def sliding_psn_forward(x, weight, bias, T):
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['spikingjelly', 'triton'],
+        line_vals=['spikingjelly', 'spikingjelly-compile', 'triton'],
         # label name for the lines
-        line_names=['SpikingJelly', 'Triton'],
+        line_names=['SpikingJelly', 'SpikingJelly (compile)', 'Triton'],
         # line styles
         styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
@@ -48,9 +48,9 @@ def sliding_psn_forward(x, weight, bias, T):
         # argument name whose value corresponds to a different line in the plot
         line_arg='neuron_type',
         # possible values for `line_arg``
-        line_vals=['spikingjelly', 'triton'],
+        line_vals=['spikingjelly', 'spikingjelly-compile', 'triton'],
         # label name for the lines
-        line_names=['SpikingJelly', 'Triton'],
+        line_names=['SpikingJelly', 'SpikingJelly (compile)', 'Triton'],
         # line styles
         styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
         ylabel="Execution Time (ms)",  # label name for the y-axis
@@ -73,6 +73,12 @@ def bacnmark(T, NCL, k, neuron_type):
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
+    elif neuron_type == "spikingjelly-compile":
+        f = neuron.SlidingPSN(k=k, step_mode="m").to(DEVICE)
+        f = torch.compile(f, backend="inductor")
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
+        )
     elif neuron_type == "triton":
         weight = torch.randn([k], device=DEVICE, requires_grad=True)
         bias = torch.tensor(-1., device=DEVICE, requires_grad=True)
@@ -81,7 +87,6 @@ def bacnmark(T, NCL, k, neuron_type):
             lambda: sliding_psn_forward(x, weight, bias, T).backward(grad_y),
             quantiles=QUANTILES
         )
-        print(x.grad)
 
     return results
 

@@ -1,22 +1,5 @@
-import torch
 import triton
 import triton.language as tl
-
-
-@torch.library.custom_op("flashsnn::spike_fn", mutates_args=())
-def spike_fn(h: torch.Tensor) -> torch.Tensor:
-    """Spike generation.
-
-    The function is registered as a custom pytorch operator so that fx will not 
-    trace through this function!
-
-    According to pytorch docs, reasons for creating a custom op include: 
-    * Wrapping a third-party library or custom kernel to work with PyTorch 
-        subsystems like Autograd. 
-    * Preventing torch.compile/export/FX tracing from peeking 
-        inside your function.
-    """
-    return (h >= 0.).to(h.dtype)
 
 
 @triton.jit

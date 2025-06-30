@@ -16,19 +16,38 @@ DTYPE_LIST = [torch.float32, torch.float16]
 BETA_LIST = [0.5, 0., 0.9, 0.1]
 
 
-def sigmoid_surrogate_torch(
-    h: torch.Tensor, dtype: torch.dtype
-) -> torch.Tensor:
+def sigmoid_surrogate_torch(h: torch.Tensor) -> torch.Tensor:
     alpha = 4.
     sgax = torch.sigmoid(
         alpha * h.to(torch.float32)
     )  # triton's exp() supports only fp32 and fp64. Manually convert it!
     sgax = sgax * (1.-sgax) * alpha
-    return sgax.to(dtype)
+    return sgax.to(h.dtype)
 
 
 @triton.jit
 def sg_high_level_kernel(
+    h_ptr, sg_ptr, N, BLOCK_SIZE: tl.constexpr, op: tl.constexpr
+):
+    pid = tl.program_id(axis=0)
+    offsets = pid*BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    h = tl.load(h_ptr + offsets, mask=offsets < N)
+
+    sg = op(h)
+    tl.store(sg_ptr + offsets, sg, mask=offsets < N)
+
+
+def sg_high_level_kernel_wrapper(h: torch.Tensor, op: triton.JITFunction):
+    sg = torch.empty_like(h)
+    N = h.numel()
+    BLOCK_SIZE = 256
+    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    sg_high_level_kernel[grid](h, sg, N, BLOCK_SIZE, op)
+    return sg
+
+
+@triton.jit
+def sg_high_level_kernel2(
     h_ptr, sg_ptr, N, BLOCK_SIZE: tl.constexpr, op: tl.constexpr,
     dtype: tl.constexpr
 ):
@@ -40,12 +59,19 @@ def sg_high_level_kernel(
     tl.store(sg_ptr + offsets, sg, mask=offsets < N)
 
 
-def sg_high_level_kernel_wrapper(h: torch.Tensor, op: triton.JITFunction):
+def sg_high_level_kernel_wrapper2(h: torch.Tensor, op: triton.JITFunction):
     sg = torch.empty_like(h)
     N = h.numel()
     BLOCK_SIZE = 256
     grid = (triton.cdiv(N, BLOCK_SIZE),)
-    sg_high_level_kernel[grid](h, sg, N, BLOCK_SIZE, op, type_dict[h.dtype])
+    sg_high_level_kernel2[grid](
+        h,
+        sg,
+        N,
+        BLOCK_SIZE,
+        op,
+        type_dict[h.dtype],
+    )
     return sg
 
 
@@ -53,11 +79,13 @@ def sg_high_level_kernel_wrapper(h: torch.Tensor, op: triton.JITFunction):
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
 def test_sigmoid_sg_torch2triton(shape, dtype):
     x = torch.randn(shape, dtype=dtype, device="cuda")
-    sg1 = sg_high_level_kernel_wrapper(
+    sg1 = sg_high_level_kernel_wrapper2(
         x, surrogate_kernels.sigmoid_surrogate_backward
     )
     sigmoid_surrogate_t2t = torch2triton.transpile_triton_code(
-        sigmoid_surrogate_torch, verbose=True
+        sigmoid_surrogate_torch,
+        (torch.tensor(1., dtype=dtype),),
+        verbose=True,
     )
     sg2 = sg_high_level_kernel_wrapper(x, sigmoid_surrogate_t2t)
     assert_close(sg1, sg2, prefix="sg_sigmoid")
@@ -109,7 +137,6 @@ def _multistep_lif_high_level_inference_kernel(
         x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
 
         s, v = op(x, v)
-        tl.static_print(s.dtype, v.dtype)
 
         s_ptrs = tl.make_block_ptr(
             s_seq_ptr,
@@ -132,7 +159,6 @@ def multistep_lif_high_level_inference_kernel_wrapper(
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    print(x_seq.dtype, s_seq.dtype)
     _multistep_lif_high_level_inference_kernel[grid](
         x_seq,
         s_seq,
@@ -154,13 +180,16 @@ def test_lif_torch2triton(shape, dtype, beta):
     s1 = lif.multistep_lif_hard_inference(x, beta)
 
     core = torch2triton.transpile_triton_code(
-        lif_core_generator(beta=beta), verbose=True
+        lif_core_generator(beta=beta),
+        (torch.tensor(1.), torch.tensor(1.)),
+        verbose=True,
     )
     s2 = multistep_lif_high_level_inference_kernel_wrapper(x, beta, core)
     assert_close(s1, s2, prefix="lif_spike")
 
 
 if __name__ == "__main__":
+    test_sigmoid_sg_torch2triton((4, 3, 3, 224, 224), torch.float16)
     test_lif_torch2triton((4, 3, 3, 224, 224), torch.float16, 0.5)
     test_lif_torch2triton((4, 3, 3, 224, 224), torch.float16, 0.1)
     test_lif_torch2triton((4, 3, 3, 224, 224), torch.float16, 0.9)
