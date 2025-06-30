@@ -85,8 +85,7 @@ forward_template = """{core_str}
 @triton.jit
 def flexsn_forward_kernel_{hash}(
     x_seq_ptr,  # [T, NCL]
-    s_seq_ptr,
-    {extra_signature},
+    {return_signature},
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
@@ -108,18 +107,9 @@ def flexsn_forward_kernel_{hash}(
         )
         x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
 
-        s, v{extra_core_return} = {core_name}(x, v)
+        {core_return} = {core_name}(x, v)
 
-        s_ptrs = tl.make_block_ptr(
-            s_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        tl.store(s_ptrs, s, boundary_check=(1,))
-        {extra_store}
+        {stores}
 """
 
 store_template = """
@@ -138,31 +128,51 @@ store_template = """
 def get_flexsn_forward_kernel(
     core_str: str,
     core_name: str,
+    core_returns: List[str],
     n_extra_core_returns: int,
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
 
-    extra_signature = f",\n{INDENTATION}".join([
-        f"res{i}_seq_ptr" for i in range(n_extra_core_returns)
-    ])
+    symbols = {core_returns[0]: "s", core_returns[1]: "v"}
+    cnt = {"s": 1, "v": 1}
+    n = 0
+    kernel_return_vars = ["s"]
+    core_return_vars = ["s", "v"]
 
-    extra_core_return = "".join([
-        f", res{i}" for i in range(n_extra_core_returns)
-    ])
+    for ret in core_returns[2:]:
+        if ret in symbols:
+            core_return_vars.append(symbols[ret] + f"_{cnt[symbols[ret]]}")
+            cnt[symbols[ret]] += 1
+            if symbols[ret] == "v" and cnt["v"] == 2:
+                kernel_return_vars.append("v")
+        else:
+            symbols[ret] = f"res{n}"
+            cnt[f"res{n}"] = 1
+            kernel_return_vars.append(f"res{n}")
+            core_return_vars.append(f"res{n}")
+            n += 1
 
-    extra_store = "".join([
-        store_template.format(name=f"res{i}")
-        for i in range(n_extra_core_returns)
+    print(symbols)
+    print(cnt)
+    print(kernel_return_vars)
+    print(core_return_vars)
+
+    return_signature = f",\n{INDENTATION}".join([
+        f"{r}_seq_ptr" for r in kernel_return_vars
+    ])
+    core_return = ", ".join([r for r in core_return_vars])
+    stores = "".join([
+        store_template.format(name=r) for r in kernel_return_vars
     ])
 
     kernel_str = forward_template.format(
         core_str=core_str,
         core_name=core_name,
         hash=hash,
-        extra_signature=extra_signature,
-        extra_core_return=extra_core_return,
-        extra_store=extra_store
+        return_signature=return_signature,
+        core_return=core_return,
+        stores=stores,
     )
     kernel_name = f"flexsn_forward_kernel_{hash}"
     if verbose:
