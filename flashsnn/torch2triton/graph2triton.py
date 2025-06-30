@@ -42,8 +42,10 @@ FX_TO_TRITON = {
         lambda args, kwargs: f"{_uw(args[1])} - {_uw(args[0])}",
     "mul.Tensor":
         lambda args, kwargs: f"{_uw(args[0])} * {_uw(args[1])}",
-    "reciprocal.default":
-        lambda args, kwargs: f"1. / {_uw(args[0])}",
+    "reciprocal.default": # may result in change of dtype!!!
+        lambda args, kwargs: f"(1. / {_uw(args[0])}).to({_uw(args[0])}.dtype)",
+    "neg.default":
+        lambda args, kwargs: f"-{_uw(args[0])}",
     "spike_fn.default":
         lambda args, kwargs: f"({_uw(args[0])} >= 0.).to({_uw(args[0])}.dtype)",
     "detach.default":

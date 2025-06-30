@@ -33,8 +33,11 @@ def test_flexsn_inference(beta, shape, dtype):
     x = torch.randn(shape, dtype=dtype, device="cuda")
 
     core = lif_core_generator(beta=beta)
+    graph = torch2triton.generate_inference_graph(
+        core, (x, torch.randn_like(x))
+    )
     core_str, core_name = torch2triton.generate_triton_code_str(
-        core, verbose=True
+        graph, core.__name__, verbose=True
     )
     f = flexsn.get_flexsn_inference_kernel(core_str, core_name, verbose=True)
     s = flexsn.flexsn_inference(x, f)
@@ -57,24 +60,30 @@ def test_flexsn_forward_backward(beta, shape, dtype):
     core = lif_core_generator(beta=beta)
 
     # prepare inference core
+    graph = torch2triton.generate_inference_graph(
+        core, (x, torch.randn_like(x))
+    )
     core_str, core_name = torch2triton.generate_triton_code_str(
-        core, verbose=True
+        graph, core.__name__, verbose=True
     )
     f_inf = flexsn.get_flexsn_inference_kernel(
         core_str, core_name, verbose=True
     )
 
     # prepare forward core
-    fwd_graph, bwd_graph = torch2triton.generate_backward_fx_graph(
-        core, requires_grad=(True, True)
+    fwd_graph, bwd_graph = torch2triton.generate_forward_and_backward_graph(
+        core, (x, torch.randn_like(x)), requires_grad=(True, True)
     )
-    bi2fo = torch2triton.get_bi2fo(fwd_graph, bwd_graph)
 
+    core_returns = [
+        str(a) for a in fwd_graph.find_nodes(op="output")[0].args[0]
+    ]
+    n_fwd_ret = len(core_returns)
     core_str, core_name = torch2triton.generate_triton_code_str(
         fwd_graph, core.__name__ + "_forward", verbose=True
     )
     f_fwd = flexsn.get_flexsn_forward_kernel(
-        core_str, core_name, bi2fo=bi2fo, verbose=True
+        core_str, core_name, n_extra_core_returns=n_fwd_ret - 2, verbose=True
     )
 
     # prepare backward core
@@ -82,10 +91,10 @@ def test_flexsn_forward_backward(beta, shape, dtype):
         bwd_graph, core.__name__ + "_backward", verbose=True
     )
     f_bwd = flexsn.get_flexsn_backward_kernel(
-        core_str, core_name, bi2fo=bi2fo, verbose=True
+        core_str, core_name, n_extra_core_inputs=n_fwd_ret - 2, verbose=True
     )
 
-    s = flexsn.FlexSNFunction.apply(x1, bi2fo, f_inf, f_fwd, f_bwd)
+    s = flexsn.FlexSNFunction.apply(x1, n_fwd_ret - 2, f_inf, f_fwd, f_bwd)
     s.backward(gs)
 
     # handwritten LIF kernel
@@ -98,4 +107,4 @@ def test_flexsn_forward_backward(beta, shape, dtype):
 
 if __name__ == "__main__":
     # test_flexsn_inference(0.5, (4, 5, 3, 224, 224), torch.float32)
-    test_flexsn_forward_backward(0.5, (4, 5, 3, 224, 224), torch.float32)
+    test_flexsn_forward_backward(0.5, (4, 5, 3, 224, 224), torch.float16)

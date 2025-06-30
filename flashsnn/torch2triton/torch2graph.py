@@ -34,8 +34,7 @@ class GraphOptimizer(fx.Transformer):
         if target.__name__ == "detach.default":
             # Remove `.detach()` operation.
             # We can safely remove it since the bwd graph has already been generated!
-            i = args[0]
-            return i
+            return args[0]
         return super().call_function(target, args, kwargs)
 
 

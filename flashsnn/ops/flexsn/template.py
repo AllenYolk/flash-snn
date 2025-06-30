@@ -138,29 +138,22 @@ store_template = """
 def get_flexsn_forward_kernel(
     core_str: str,
     core_name: str,
-    bi2fo: List[int],  # flashsnn.torch2triton.auto_backward.get_bi2fo()
+    n_extra_core_returns: int,
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
 
-    # Collect bwd_core's required inputs. s_seq should bot be included here, as
-    # it has been included in the forward kernel. We use bi2fo[j] > 0 to filter
-    # out s_seq (bi2fo==0) and unmapped values. Notice that extra_signature
-    # will follow bi2fo's order (a.k.a. bwd_core's input order).
     extra_signature = f",\n{INDENTATION}".join([
-        (f"v_seq_ptr" if i == 1 else f"res{i}_seq_ptr") for i in bi2fo if i > 0
+        f"res{i}_seq_ptr" for i in range(n_extra_core_returns)
     ])
 
-    # This is bi2fo's value domain! res0 is s, res1 is v; these two special
-    # values are written to the template and thus are not included here.
-    extra_core_return = "".join([f", res{i}" for i in range(2, max(bi2fo) + 1)])
+    extra_core_return = "".join([
+        f", res{i}" for i in range(n_extra_core_returns)
+    ])
 
-    # Store the required results specified by bi2fo. s is always stored and is
-    # written to the template, so it is not included here.
     extra_store = "".join([
-        store_template.format(name=f"v" if i == 1 else f"res{i}")
-        for i in bi2fo
-        if i > 0
+        store_template.format(name=f"res{i}")
+        for i in range(n_extra_core_returns)
     ])
 
     kernel_str = forward_template.format(
@@ -219,7 +212,7 @@ def flexsn_backward_kernel_{hash}(
             grad_s_ptrs, boundary_check=(1,), padding_option="zero"
         )
         {extra_load}
-        grad_x, grad_v = {core_name}(grad_s, grad_v{extra_core_input})
+        grad_x, grad_v = {core_name}({extra_core_input}grad_s, grad_v)
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,
@@ -250,25 +243,25 @@ load_template = """
 def get_flexsn_backward_kernel(
     core_str: str,
     core_name: str,
-    bi2fo: str,  # flashsnn.torch2triton.auto_backward.get_bi2fo()
+    n_extra_core_inputs: int,
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
 
-    # Set bwd kernel's signature according to bwd_core's required inputs. Notice
-    # that the order of these arguments follows bi2fo's order (a.k.a.
-    # bwd_core's input order).
     extra_signature = f",\n{INDENTATION}".join([
-        f"res{i}_seq_ptr" for i in bi2fo if i >= 0
+        f"res{i}_seq_ptr" for i in range(n_extra_core_inputs)
     ])
 
     # Load required intermediate results.
     extra_load = "".join([
-        load_template.format(name=f"res{i}") for i in bi2fo if i >= 0
+        load_template.format(name=f"res{i}")
+        for i in range(n_extra_core_inputs)
     ])
 
     # Set bwd_core's input according to bi2fo.
-    extra_core_input = "".join([f", res{i}" for i in bi2fo if i >= 0])
+    extra_core_input = "".join([
+        f"res{i}, " for i in range(n_extra_core_inputs)
+    ])
 
     kernel_str = backward_template.format(
         core_str=core_str,
