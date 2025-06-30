@@ -20,7 +20,7 @@ def lif_core_generator(beta):
     def lif_core(x: torch.Tensor, v: torch.Tensor):
         h = v*beta + x
         s = spike_fn(h - 1.)
-        v = h * (1. - s.detach()) * s
+        v = h * (1. - s.detach())
         return s, v
 
     return lif_core
@@ -67,7 +67,7 @@ def test_flexsn_forward_backward(beta, shape, dtype):
         graph, core.__name__, verbose=False
     )
     f_inf = flexsn.get_flexsn_inference_kernel(
-        core_str, core_name, verbose=False
+        core_str, core_name, verbose=True
     )
 
     # prepare forward core
@@ -75,19 +75,13 @@ def test_flexsn_forward_backward(beta, shape, dtype):
         core, (x, torch.randn_like(x)), requires_grad=(True, True)
     )
 
-    core_returns = [
-        str(a) for a in fwd_graph.find_nodes(op="output")[0].args[0]
-    ]
-    n_fwd_ret = len(core_returns)
+    info = flexsn.extract_info(fwd_graph)
+
     core_str, core_name = torch2triton.generate_triton_code_str(
         fwd_graph, core.__name__ + "_forward", verbose=False
     )
     f_fwd = flexsn.get_flexsn_forward_kernel(
-        core_str,
-        core_name,
-        core_returns=core_returns,
-        n_extra_core_returns=n_fwd_ret - 2,
-        verbose=True
+        core_str, core_name, info=info, verbose=True
     )
 
     # prepare backward core
@@ -95,10 +89,10 @@ def test_flexsn_forward_backward(beta, shape, dtype):
         bwd_graph, core.__name__ + "_backward", verbose=False
     )
     f_bwd = flexsn.get_flexsn_backward_kernel(
-        core_str, core_name, n_extra_core_inputs=n_fwd_ret - 2, verbose=False
+        core_str, core_name, info=info, verbose=True
     )
 
-    s = flexsn.FlexSNFunction.apply(x1, n_fwd_ret - 2, f_inf, f_fwd, f_bwd)
+    s = flexsn.FlexSNFunction.apply(x1, info, f_inf, f_fwd, f_bwd)
     s.backward(gs)
 
     # handwritten LIF kernel

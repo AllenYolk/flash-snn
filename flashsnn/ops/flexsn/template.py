@@ -1,5 +1,3 @@
-from typing import List
-
 import triton
 
 from flashsnn.torch2triton import compile_triton_code_str
@@ -128,42 +126,19 @@ store_template = """
 def get_flexsn_forward_kernel(
     core_str: str,
     core_name: str,
-    core_returns: List[str],
-    n_extra_core_returns: int,
+    info: dict,
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
-
-    symbols = {core_returns[0]: "s", core_returns[1]: "v"}
-    cnt = {"s": 1, "v": 1}
-    n = 0
-    kernel_return_vars = ["s"]
-    core_return_vars = ["s", "v"]
-
-    for ret in core_returns[2:]:
-        if ret in symbols:
-            core_return_vars.append(symbols[ret] + f"_{cnt[symbols[ret]]}")
-            cnt[symbols[ret]] += 1
-            if symbols[ret] == "v" and cnt["v"] == 2:
-                kernel_return_vars.append("v")
-        else:
-            symbols[ret] = f"res{n}"
-            cnt[f"res{n}"] = 1
-            kernel_return_vars.append(f"res{n}")
-            core_return_vars.append(f"res{n}")
-            n += 1
-
-    print(symbols)
-    print(cnt)
-    print(kernel_return_vars)
-    print(core_return_vars)
+    fwd_kernel_returns = info["fwd_kernel_returns"]
+    fwd_core_return_symbols = info["fwd_core_return_symbols"]
 
     return_signature = f",\n{INDENTATION}".join([
-        f"{r}_seq_ptr" for r in kernel_return_vars
+        f"{r}_seq_ptr" for r in fwd_kernel_returns
     ])
-    core_return = ", ".join([r for r in core_return_vars])
+    core_return = ", ".join([r for r in fwd_core_return_symbols])
     stores = "".join([
-        store_template.format(name=r) for r in kernel_return_vars
+        store_template.format(name=r) for r in fwd_kernel_returns
     ])
 
     kernel_str = forward_template.format(
@@ -175,12 +150,17 @@ def get_flexsn_forward_kernel(
         stores=stores,
     )
     kernel_name = f"flexsn_forward_kernel_{hash}"
+    kernel_exe = compile_triton_code_str(kernel_str, kernel_name, verbose)
+
     if verbose:
+        print("=" * 40, core_name, "=" * 40)
         print("Generating flexsn forward kernel:")
         print("```")
         print(kernel_str)
         print("```")
-    kernel_exe = compile_triton_code_str(kernel_str, kernel_name, verbose)
+        print(info)
+        print("=" * 40, "=" * len(core_name), "=" * 40)
+
     return kernel_exe
 
 
@@ -253,25 +233,24 @@ load_template = """
 def get_flexsn_backward_kernel(
     core_str: str,
     core_name: str,
-    n_extra_core_inputs: int,
+    info: dict,
     verbose: bool = False,
 ) -> triton.JITFunction:
     hash = core_name[-8:]
+    n = info["N_fwd_core_returns"] - 2  # s, v not included
 
+    # fwd_core_returns[2:] are all unique!!!
     extra_signature = f",\n{INDENTATION}".join([
-        f"res{i}_seq_ptr" for i in range(n_extra_core_inputs)
+        f"res{i}_seq_ptr" for i in range(n)
     ])
 
     # Load required intermediate results.
     extra_load = "".join([
-        load_template.format(name=f"res{i}")
-        for i in range(n_extra_core_inputs)
+        load_template.format(name=f"res{i}") for i in range(n)
     ])
 
     # Set bwd_core's input according to bi2fo.
-    extra_core_input = "".join([
-        f"res{i}, " for i in range(n_extra_core_inputs)
-    ])
+    extra_core_input = "".join([f"res{i}, " for i in range(n)])
 
     kernel_str = backward_template.format(
         core_str=core_str,

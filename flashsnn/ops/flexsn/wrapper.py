@@ -38,31 +38,23 @@ def flexsn_inference(x_seq: torch.Tensor, f: triton.JITFunction):
     return s_seq
 
 
-def flexsn_forward(
-    x_seq: torch.Tensor, f: triton.JITFunction, n_extra_core_outputs: int
-):
+def flexsn_forward(x_seq: torch.Tensor, f: triton.JITFunction, n_returns: int):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
     BLOCK_NCL = _get_block_size(NCL, x_seq.device.index)
-    s_seq = torch.empty_like(x_seq)
-    # Create buffers for extra returns. The filer condition is the same as that
-    # of get_flexsn_forward_kernel()'s extra_signature.
-    extra_returns = [
-        torch.empty_like(x_seq) for i in range(n_extra_core_outputs)
-    ]
+    returns = [torch.empty_like(x_seq) for i in range(n_returns)]
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
     f[grid](
         x_seq,
-        s_seq,
-        *extra_returns,
+        *returns,
         T=T,
         NCL=NCL,
         BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
-    return s_seq, *extra_returns
+    return tuple(returns)
 
 
 def flexsn_backward(
@@ -97,18 +89,20 @@ class FlexSNFunction(autograd.Function):
     def forward(
         ctx,
         x_seq: torch.Tensor,
-        n_extra_core_outputs: int,
+        info: dict,
         fn_inf: triton.JITFunction,
         fn_fwd: triton.JITFunction,
         fn_bwd: triton.JITFunction,
     ):
         if any(ctx.needs_input_grad):
-            results = flexsn_forward(x_seq, fn_fwd, n_extra_core_outputs)
-            # results: [s_seq, <bi2fo-guided extra returns>]
+            results = flexsn_forward(
+                x_seq, fn_fwd, info["N_fwd_kernel_returns"]
+            )
             s_seq = results[0]
-            extra_returns = list(results[1:])
-            # The order of extra_returns satisfies the requirements of fn_bwd!
-            ctx.save_for_backward(*extra_returns)
+            to_save = []
+            for i in info["extra_return_mapping"]:
+                to_save.append(results[i])
+            ctx.save_for_backward(*to_save)
             ctx.fn_bwd = fn_bwd
         else:
             s_seq = flexsn_inference(x_seq, fn_inf)
