@@ -50,8 +50,10 @@ FX_TO_TRITON = {
         lambda args, kwargs: f"({_uw(args[0])} >= 0.).to({_uw(args[0])}.dtype)",
     "detach.default":
         lambda args, kwargs: f"{_uw(args[0])}",
-    "sigmoid.default":
-        lambda args, kwargs: f"tl.sigmoid({_uw(args[0])})",
+    "sigmoid.default": # triton does not support exponential operations on fp16
+        lambda args, kwargs: f"tl.sigmoid({_uw(args[0])}.to(tl.float32)).to({_uw(args[0])}.dtype)",
+    "sigmoid_backward.default": # args[1] is the output of sigmoid
+        lambda args, kwargs: (f"{_uw(args[0])} * {_uw(args[1])} * (1 - {_uw(args[1])})"),
     "_to_copy.default":
         lambda args, kwargs: f"{_uw(args[0])}.to({_uw(kwargs['dtype'])})",
 }

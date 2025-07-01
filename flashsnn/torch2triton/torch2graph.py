@@ -1,8 +1,11 @@
 from typing import Tuple, Optional, Callable
+import warnings
 
 import torch
 import torch.fx as fx
 from torch._functorch.aot_autograd import aot_function
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class GraphCollector:
@@ -71,12 +74,14 @@ def generate_forward_and_backward_graph(
         bw_compiler=collector.get_backward_compiler()
     )
 
-    # if requires_grad is specified, overwrite the requires_grad flag of the
-    # tensors in example_inputs
     if requires_grad is not None:
         for i, r in zip(example_inputs, requires_grad):
             if isinstance(i, torch.Tensor):
                 i.requires_grad = r
+    else:  # if not specified, assume that all tensors require gradients
+        for i in example_inputs:
+            if isinstance(i, torch.Tensor):
+                i.requires_grad = True
 
     # feed the fake inputs
     ys = f(*example_inputs)
