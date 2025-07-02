@@ -22,9 +22,7 @@ def _get_block_t_size(T):
 
 @triton.autotune(
     configs=[
-        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
-        for f in [1, 2, 4]
-        for w in [2, 4, 8]
+        triton.Config({"BLOCK_NCL": w * 32}, num_warps=w) for w in [2, 4, 8]
     ],
     key=["BLOCK_T", "dtype"],
 )
@@ -93,9 +91,7 @@ def _psn_inference_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
-        for f in [1, 2, 4]
-        for w in [2, 4, 8]
+        triton.Config({"BLOCK_NCL": w * 32}, num_warps=w) for w in [2, 4, 8]
     ],
     key=["BLOCK_T", "dtype"],
 )

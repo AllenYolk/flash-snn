@@ -7,23 +7,12 @@ import triton
 
 from flashsnn.utils import type_dict, contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
-from flashsnn.utils import get_multiprocessor_count
-
-
-@lru_cache(maxsize=None)
-def _get_block_size(NCL, device_idx):
-    BLOCK_NCL = triton.next_power_of_2(
-        triton.cdiv(NCL, get_multiprocessor_count(device_idx))
-    )
-    BLOCK_NCL = min(1024, max(128, BLOCK_NCL))
-    return BLOCK_NCL
 
 
 def flexsn_inference(f: triton.JITFunction, num_outputs: int, *args) -> tuple:
     x_example = args[0]
     T = x_example.shape[0]
     NCL = x_example[0].numel()
-    BLOCK_NCL = _get_block_size(NCL, x_example.device.index)
     dtype = x_example.dtype
     outputs = [torch.empty_like(x_example) for _ in range(num_outputs)]
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -33,7 +22,6 @@ def flexsn_inference(f: triton.JITFunction, num_outputs: int, *args) -> tuple:
         *outputs,
         T=T,
         NCL=NCL,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return tuple(outputs)
@@ -45,7 +33,6 @@ def flexsn_forward(
     x_example = args[0]
     T = x_example.shape[0]
     NCL = x_example[0].numel()
-    BLOCK_NCL = _get_block_size(NCL, x_example.device.index)
     returns = [
         torch.empty_like(x_example) for i in range(num_fwd_kernel_returns)
     ]
@@ -57,7 +44,6 @@ def flexsn_forward(
         *returns,
         T=T,
         NCL=NCL,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return tuple(returns)
@@ -67,7 +53,6 @@ def flexsn_backward(f: triton.JITFunction, num_inputs: int, *args) -> tuple:
     grad_example = args[0]
     T = grad_example.shape[0]
     NCL = grad_example[0].numel()
-    BLOCK_NCL = _get_block_size(NCL, grad_example.device.index)
     grad_inputs = [torch.empty_like(grad_example) for i in range(num_inputs)]
     dtype = grad_example.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -77,7 +62,6 @@ def flexsn_backward(f: triton.JITFunction, num_inputs: int, *args) -> tuple:
         *grad_inputs,
         T=T,
         NCL=NCL,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return tuple(grad_inputs)

@@ -35,7 +35,7 @@ kernel_template = """{core_str}
 
 @triton.autotune(
     configs=[
-        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
+        triton.Config({{"BLOCK_NCL": f * w * 32}}, num_warps=w)
         for f in [1, 2, 4]
         for w in [2, 4, 8]
     ],
