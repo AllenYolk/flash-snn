@@ -32,14 +32,15 @@ load_template = """
 
 kernel_template = """{core_str}
 
-# @triton.autotune(
-    # configs=[
-        # triton.Config({{}}, num_warps=w, num_stages=s)
-        # for w in [2, 4, 8]
-        # for s in [2, 3, 4]
-    # ],
-    # key=["T", "BLOCK_NCL", "dtype"],
-# )
+
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
+        for f in [1, 2, 4]
+        for w in [2, 4, 8]
+    ],
+    key=["T", "dtype"],
+)
 @triton.jit
 def flexsn_{kernel_type}_kernel_{hash}(
     {input_signature},

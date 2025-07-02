@@ -9,25 +9,15 @@ import triton.language as tl
 from flashsnn.ops import surrogate_kernels
 from flashsnn.utils import type_dict, contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
-from flashsnn.utils import get_multiprocessor_count
-
-
-@lru_cache(maxsize=None)
-def _get_block_size(NCL, device_idx):
-    BLOCK_NCL = triton.next_power_of_2(
-        triton.cdiv(NCL, get_multiprocessor_count(device_idx))
-    )
-    BLOCK_NCL = min(1024, max(128, BLOCK_NCL))
-    return BLOCK_NCL
 
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=w, num_stages=s)
+        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
+        for f in [1, 2, 4]
         for w in [2, 4, 8]
-        for s in [2, 3, 4]
     ],
-    key=["T", "BLOCK_NCL", "dtype"],
+    key=["T", "dtype"],
 )
 @triton.jit
 def _multistep_lif_soft_inference_kernel(
@@ -73,11 +63,11 @@ def _multistep_lif_soft_inference_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=w, num_stages=s)
+        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
+        for f in [1, 2, 4]
         for w in [2, 4, 8]
-        for s in [2, 3, 4]
     ],
-    key=["T", "BLOCK_NCL", "dtype"],
+    key=["T", "dtype"],
 )
 @triton.jit
 def _multistep_lif_soft_forward_kernel(
@@ -133,11 +123,11 @@ def _multistep_lif_soft_forward_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=w, num_stages=s)
+        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
+        for f in [1, 2, 4]
         for w in [2, 4, 8]
-        for s in [2, 3, 4]
     ],
-    key=["T", "BLOCK_NCL", "dtype"],
+    key=["T", "dtype"],
 )
 @triton.jit
 def _multistep_lif_soft_not_detached_backward_kernel(
@@ -196,11 +186,11 @@ def _multistep_lif_soft_not_detached_backward_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=w, num_stages=s)
+        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
+        for f in [1, 2, 4]
         for w in [2, 4, 8]
-        for s in [2, 3, 4]
     ],
-    key=["T", "BLOCK_NCL", "dtype"],
+    key=["T", "dtype"],
 )
 @triton.jit
 def _multistep_lif_soft_detached_backward_kernel(
@@ -260,7 +250,6 @@ def _multistep_lif_soft_detached_backward_kernel(
 def multistep_lif_soft_inference(x_seq: torch.Tensor, beta: float):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
-    BLOCK_NCL = _get_block_size(NCL, x_seq.device.index)
     s_seq = torch.empty_like(x_seq)
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -271,7 +260,6 @@ def multistep_lif_soft_inference(x_seq: torch.Tensor, beta: float):
         beta,
         T=T,
         NCL=NCL,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return s_seq
@@ -280,7 +268,6 @@ def multistep_lif_soft_inference(x_seq: torch.Tensor, beta: float):
 def multistep_lif_soft_forward(x_seq: torch.Tensor, beta: float):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
-    BLOCK_NCL = _get_block_size(NCL, x_seq.device.index)
     s_seq = torch.empty_like(x_seq)
     h_seq = torch.empty_like(x_seq)
     dtype = x_seq.dtype
@@ -293,7 +280,6 @@ def multistep_lif_soft_forward(x_seq: torch.Tensor, beta: float):
         beta,
         T=T,
         NCL=NCL,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return s_seq, h_seq
@@ -307,7 +293,6 @@ def multistep_lif_soft_not_detached_backward(
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
-    BLOCK_NCL = _get_block_size(NCL, grad_s_seq.device.index)
     grad_x_seq = torch.empty_like(grad_s_seq)
     dtype = grad_s_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -319,7 +304,6 @@ def multistep_lif_soft_not_detached_backward(
         beta,
         T=T,
         NCL=NCL,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
         sg_fn=sn_fn,
     )
@@ -334,7 +318,6 @@ def multistep_lif_soft_detached_backward(
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
-    BLOCK_NCL = _get_block_size(NCL, grad_s_seq.device.index)
     grad_x_seq = torch.empty_like(grad_s_seq)
     dtype = grad_s_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -346,7 +329,6 @@ def multistep_lif_soft_detached_backward(
         beta,
         T=T,
         NCL=NCL,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
         sg_fn=sg_fn,
     )

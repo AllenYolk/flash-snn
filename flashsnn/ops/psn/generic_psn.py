@@ -7,30 +7,26 @@ import triton
 import triton.language as tl
 
 from flashsnn.ops import surrogate_kernels
-from flashsnn.utils import get_multiprocessor_count, type_dict
+from flashsnn.utils import type_dict
 from flashsnn.utils import contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 from flashsnn.utils import get_device_capability
 
 
 @lru_cache(maxsize=None)
-def _get_block_size(T, NCL, device_idx):
+def _get_block_t_size(T):
     BLOCK_T = triton.next_power_of_2(T)
     BLOCK_T = max(16, BLOCK_T)  # BLOCK_T >= T, BLOCK_T >= 16
-    BLOCK_NCL = triton.next_power_of_2(
-        triton.cdiv(NCL, get_multiprocessor_count(device_idx))
-    )
-    BLOCK_NCL = min(128, max(32, BLOCK_NCL))
-    return BLOCK_T, BLOCK_NCL
+    return BLOCK_T
 
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=w, num_stages=s)
+        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
+        for f in [1, 2, 4]
         for w in [2, 4, 8]
-        for s in [2, 3, 4]
     ],
-    key=["BLOCK_T", "BLOCK_NCL", "dtype"],
+    key=["BLOCK_T", "dtype"],
 )
 @triton.jit
 def _psn_inference_kernel(
@@ -97,11 +93,11 @@ def _psn_inference_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=w, num_stages=s)
+        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
+        for f in [1, 2, 4]
         for w in [2, 4, 8]
-        for s in [2, 3, 4]
     ],
-    key=["BLOCK_T", "BLOCK_NCL", "dtype"],
+    key=["BLOCK_T", "dtype"],
 )
 @triton.jit
 def _psn_forward_kernel(
@@ -271,12 +267,8 @@ def _psn_backward_kernel_with_atomic(
 
 
 @triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=w, num_stages=s)
-        for w in [2, 4, 8]
-        for s in [2, 3, 4]
-    ],
-    key=["BLOCK_T", "BLOCK_NCL", "N_BLOCK_NCL", "dtype"],
+    configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
+    key=["BLOCK_T", "BLOCK_NCL", "dtype"],
 )
 @triton.jit
 def _psn_backward_kernel_without_atomic(
@@ -394,7 +386,7 @@ def psn_inference(
 ):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
-    BLOCK_T, BLOCK_NCL = _get_block_size(T, NCL, x_seq.device.index)
+    BLOCK_T = _get_block_t_size(T)
     s_seq = torch.empty_like(x_seq)
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -407,7 +399,6 @@ def psn_inference(
         T=T,
         NCL=NCL,
         BLOCK_T=BLOCK_T,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return s_seq
@@ -416,7 +407,7 @@ def psn_inference(
 def psn_forward(x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
-    BLOCK_T, BLOCK_NCL = _get_block_size(T, NCL, x_seq.device.index)
+    BLOCK_T = _get_block_t_size(T)
     s_seq = torch.empty_like(x_seq)
     h_seq = torch.empty_like(x_seq)
     dtype = x_seq.dtype
@@ -431,7 +422,6 @@ def psn_forward(x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
         T=T,
         NCL=NCL,
         BLOCK_T=BLOCK_T,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
     )
     return s_seq, h_seq
@@ -446,17 +436,18 @@ def psn_backward_with_atomic(
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
-    BLOCK_T, BLOCK_NCL = _get_block_size(T, NCL, grad_s_seq.device.index)
+    BLOCK_T = _get_block_t_size(T)
+    BLOCK_NCL = 64  # BLOCK_NCL must be explicitly specified
     N_BLOCK_NCL = triton.cdiv(NCL, BLOCK_NCL)
     dtype = grad_s_seq.dtype
     grad_x_seq = torch.empty_like(grad_s_seq)
     grad_weight = torch.zeros(
-        [N_BLOCK_NCL, T, T],
+        [T, T],
         dtype=dtype,
         device=grad_s_seq.device,
     )
     grad_bias = torch.zeros(
-        [N_BLOCK_NCL, T, 1],
+        [T, 1],
         dtype=dtype,
         device=grad_s_seq.device,
     )  # shape=[T, 1]
@@ -476,7 +467,7 @@ def psn_backward_with_atomic(
         dtype=type_dict[dtype],
         sg_fn=sg_fn,
     )
-    return grad_x_seq, grad_weight.sum(dim=0), grad_bias.sum(dim=0)
+    return grad_x_seq, grad_weight, grad_bias
 
 
 def psn_backward_without_atomic(
@@ -488,7 +479,8 @@ def psn_backward_without_atomic(
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
-    BLOCK_T, BLOCK_NCL = _get_block_size(T, NCL, grad_s_seq.device.index)
+    BLOCK_T = _get_block_t_size(T)
+    BLOCK_NCL = 64  # BLOCK_NCL must be explicitly specified
     N_BLOCK_NCL = triton.cdiv(NCL, BLOCK_NCL)
     dtype = grad_s_seq.dtype
     grad_x_seq = torch.empty_like(grad_s_seq)

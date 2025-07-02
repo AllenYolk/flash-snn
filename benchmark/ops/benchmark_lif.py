@@ -175,21 +175,21 @@ def bacnmark(T, NCL, neuron_type):
             graph, core.__name__ + "_inference", verbose=False
         )
         f_inf = flexsn.get_flexsn_inference_kernel(
-            core_str, core_name, info, verbose=True
+            core_str, core_name, info, verbose=False
         )
         # prepare the forward kernel
         core_str, core_name = torch2triton.generate_triton_code_str(
             fwd_graph, core.__name__ + "_forward", verbose=False
         )
         f_fwd = flexsn.get_flexsn_forward_kernel(
-            core_str, core_name, info=info, verbose=True
+            core_str, core_name, info=info, verbose=False
         )
         # prepare the backward kernel
         core_str, core_name = torch2triton.generate_triton_code_str(
             bwd_graph, core.__name__ + "_backward", verbose=False
         )
         f_bwd = flexsn.get_flexsn_backward_kernel(
-            core_str, core_name, info=info, verbose=True
+            core_str, core_name, info=info, verbose=False
         )
 
         f = flexsn.FlexSNFunction.apply
