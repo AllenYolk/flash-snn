@@ -82,7 +82,8 @@ def get_flexsn_inference_kernel(
         f"s{i}_seq_ptr" for i in range(num_outputs)
     ])
     state_initialization = f"\n{INDENTATION}".join([
-        f"v{i} = tl.zeros([BLOCK_NCL], dtype=dtype)" for i in range(num_states)
+        f"v{i} = tl.zeros([1, BLOCK_NCL], dtype=dtype)"
+        for i in range(num_states)
     ])
     loads = "".join([
         load_template.format(name=f"x{i}") for i in range(num_inputs)
@@ -145,7 +146,8 @@ def get_flexsn_forward_kernel(
         f"{r}_seq_ptr" for r in fwd_kernel_returns
     ])
     state_initialization = f"\n{INDENTATION}".join([
-        f"v{i} = tl.zeros([BLOCK_NCL], dtype=dtype)" for i in range(num_states)
+        f"v{i} = tl.zeros([1, BLOCK_NCL], dtype=dtype)"
+        for i in range(num_states)
     ])
     loads = "".join([
         load_template.format(name=f"x{i}") for i in range(num_inputs)
@@ -212,7 +214,7 @@ def get_flexsn_backward_kernel(
     ])
 
     state_initialization = f"\n{INDENTATION}".join([
-        f"grad_v{i} = tl.zeros([BLOCK_NCL], dtype=dtype)"
+        f"grad_v{i} = tl.zeros([1, BLOCK_NCL], dtype=dtype)"
         for i in range(num_states)
     ])
 

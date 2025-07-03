@@ -30,7 +30,7 @@ def _multistep_pli_forward_iterative_kernel(
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
 
-    y = tl.zeros([BLOCK_NCL], dtype=dtype)
+    y = tl.zeros([1, BLOCK_NCL], dtype=dtype)
 
     for t in tl.static_range(0, T, 1):
         x_ptrs = tl.make_block_ptr(
@@ -88,7 +88,7 @@ def _multistep_pli_backward_iterative_kernel(
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
 
-    dy = tl.zeros([BLOCK_NCL], dtype=dtype)
+    dy = tl.zeros([1, BLOCK_NCL], dtype=dtype)
 
     for t in tl.static_range(T - 1, -1, -1):
         grad_y_ptrs = tl.make_block_ptr(

@@ -31,7 +31,7 @@ def _multistep_lif_hard_inference_kernel(
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
 
-    v = tl.zeros([BLOCK_NCL], dtype=dtype)
+    v = tl.zeros([1, BLOCK_NCL], dtype=dtype)
     beta = tl.full([1], beta, dtype=dtype)
 
     for t in tl.static_range(0, T, 1):
@@ -82,7 +82,7 @@ def _multistep_lif_hard_forward_kernel(
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
 
-    v = tl.zeros([BLOCK_NCL], dtype=dtype)
+    v = tl.zeros([1, BLOCK_NCL], dtype=dtype)
     beta = tl.full([1], beta, dtype=dtype)
 
     for t in tl.static_range(0, T, 1):
@@ -144,7 +144,7 @@ def _multistep_lif_hard_not_detached_backward_kernel(
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
 
-    grad_v = tl.zeros([BLOCK_NCL], dtype=dtype)
+    grad_v = tl.zeros([1, BLOCK_NCL], dtype=dtype)
     beta = tl.full([1], beta, dtype=dtype)
 
     for t in tl.static_range(T - 1, -1, -1):
@@ -218,7 +218,7 @@ def _multistep_lif_hard_detached_backward_kernel(
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
 
-    grad_v = tl.zeros([BLOCK_NCL], dtype=dtype)
+    grad_v = tl.zeros([1, BLOCK_NCL], dtype=dtype)
     beta = tl.full([1], beta, dtype=dtype)
 
     for t in tl.static_range(T - 1, -1, -1):
