@@ -7,7 +7,7 @@ import torch.nn as nn
 import triton
 from spikingjelly.activation_based import surrogate, neuron, functional
 
-from flashsnn.ops import lif, spike_fn, flexsn
+from flashsnn.ops import lif, spike_fn, flexsn, surrogate_kernels
 from flashsnn import torch2triton
 
 DEVICE = "cuda"
@@ -156,7 +156,10 @@ def bacnmark(T, NCL, neuron_type):
     elif neuron_type == "triton":
         f = get_lif_autograd_function()
         results = triton.testing.do_bench(
-            lambda: f(x, 0.5).backward(grad_y), quantiles=QUANTILES
+            lambda: f(
+                x, 0.5, surrogate_kernels.atan_surrogate_backward, False, False
+            ).backward(grad_y),
+            quantiles=QUANTILES
         )
     elif neuron_type == "triton-flexsn":
         core = lif_core

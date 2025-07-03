@@ -109,10 +109,12 @@ def _multistep_li_backward_iterative_kernel(
         tl.store(grad_x_ptrs, dy, boundary_check=(1,))
 
 
-def multistep_li_forward_iterative(x_seq: torch.Tensor, beta: float):
+def multistep_li_forward_iterative(
+    x_seq: torch.Tensor, beta: float, inplace: bool = False
+):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
-    y_seq = torch.empty_like(x_seq)
+    y_seq = x_seq if inplace else torch.empty_like(x_seq)
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
@@ -127,10 +129,12 @@ def multistep_li_forward_iterative(x_seq: torch.Tensor, beta: float):
     return y_seq
 
 
-def multistep_li_backward_iterative(grad_y_seq: torch.Tensor, beta: float):
+def multistep_li_backward_iterative(
+    grad_y_seq: torch.Tensor, beta: float, inplace: bool = False
+):
     T = grad_y_seq.shape[0]
     NCL = grad_y_seq[0].numel()
-    grad_x_seq = torch.empty_like(grad_y_seq)
+    grad_x_seq = grad_y_seq if inplace else torch.empty_like(grad_y_seq)
     dtype = grad_y_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
@@ -150,14 +154,20 @@ class MultistepLIIterativeFunction(autograd.Function):
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_fwd
-    def forward(ctx, x_seq: torch.Tensor, beta: float):
-        y_seq = multistep_li_forward_iterative(x_seq, beta)
+    def forward(
+        ctx, x_seq: torch.Tensor, beta: float, fwd_inplace: bool,
+        bwd_inplace: bool
+    ):
+        y_seq = multistep_li_forward_iterative(x_seq, beta, fwd_inplace)
         ctx.beta = beta
+        ctx.bwd_inplace = bwd_inplace
         return y_seq
 
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_bwd
     def backward(ctx, grad_y_seq: torch.Tensor):
-        grad_x_seq = multistep_li_backward_iterative(grad_y_seq, ctx.beta)
-        return grad_x_seq, None
+        grad_x_seq = multistep_li_backward_iterative(
+            grad_y_seq, ctx.beta, ctx.bwd_inplace
+        )
+        return grad_x_seq, None, None, None

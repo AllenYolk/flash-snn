@@ -8,7 +8,7 @@ import torch.nn as nn
 import triton
 from spikingjelly.activation_based import surrogate, neuron, functional
 
-from flashsnn.ops import psn
+from flashsnn.ops import psn, surrogate_kernels
 
 DEVICE = "cuda"
 DTYPE = torch.float32
@@ -157,7 +157,11 @@ def bacnmark(T, NCL, neuron_type):
             requires_grad=True,
         )
         results = triton.testing.do_bench(
-            lambda: f(x, weight, bias).backward(grad_y), quantiles=QUANTILES
+            lambda: f(
+                x, weight, bias, surrogate_kernels.atan_surrogate_backward,
+                False, False
+            ).backward(grad_y),
+            quantiles=QUANTILES
         )
     elif neuron_type == "spikingjelly":
         f = SJPSN(T=T, surrogate_function=surrogate.ATan()).to(DEVICE)

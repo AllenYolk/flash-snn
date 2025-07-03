@@ -392,12 +392,15 @@ def _psn_backward_kernel_without_atomic(
 
 
 def psn_inference(
-    x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor
+    x_seq: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    inplace: bool = False
 ):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
     BLOCK_T = _get_block_t_size(T)
-    s_seq = torch.empty_like(x_seq)
+    s_seq = x_seq if inplace else torch.empty_like(x_seq)
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
@@ -415,6 +418,7 @@ def psn_inference(
 
 
 def psn_forward(x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
+    """`inplace` must be False, as x_seq is saved for backward."""
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
     BLOCK_T = _get_block_t_size(T)
@@ -443,13 +447,14 @@ def psn_backward_with_atomic(
     h_seq: torch.Tensor,
     x_seq: torch.Tensor,
     sg_fn: Callable,
+    inplace: bool = False
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
     BLOCK_T = _get_block_t_size(T)
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
     dtype = grad_s_seq.dtype
-    grad_x_seq = torch.empty_like(grad_s_seq)
+    grad_x_seq = grad_s_seq if inplace else torch.empty_like(grad_s_seq)
     grad_weight = torch.zeros(
         [T, T],
         dtype=dtype,
@@ -484,6 +489,7 @@ def psn_backward_without_atomic(
     h_seq: torch.Tensor,
     x_seq: torch.Tensor,
     sg_fn: Callable,
+    inplace: bool = False
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
@@ -491,7 +497,7 @@ def psn_backward_without_atomic(
     BLOCK_NCL = 64  # BLOCK_NCL must be explicitly specified
     N_BLOCK_NCL = triton.cdiv(NCL, BLOCK_NCL)
     dtype = grad_s_seq.dtype
-    grad_x_seq = torch.empty_like(grad_s_seq)
+    grad_x_seq = grad_s_seq if inplace else torch.empty_like(grad_s_seq)
     grad_weight = torch.zeros(
         [N_BLOCK_NCL, T, T],
         dtype=dtype,
@@ -534,18 +540,16 @@ class PSNFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(
-        ctx,
-        x_seq: torch.Tensor,
-        weight: torch.Tensor,
-        bias: torch.Tensor,
-        sg_fn: Callable = surrogate_kernels.atan_surrogate_backward
+        ctx, x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,
+        sg_fn: Callable, inf_inplace: bool, bwd_inplace: bool
     ):
         if any(ctx.needs_input_grad):
             s_seq, h_seq = psn_forward(x_seq, weight, bias)
             ctx.save_for_backward(h_seq, x_seq, weight)
             ctx.sg_fn = sg_fn
+            ctx.bwd_inplace = bwd_inplace
         else:
-            s_seq = psn_inference(x_seq, weight, bias)
+            s_seq = psn_inference(x_seq, weight, bias, inf_inplace)
         return s_seq
 
     @staticmethod
@@ -554,6 +558,6 @@ class PSNFunction(autograd.Function):
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq, x_seq, weight = ctx.saved_tensors
         grad_x_seq, grad_weight, grad_bias = psn_backward(
-            grad_s_seq, weight, h_seq, x_seq, ctx.sg_fn
+            grad_s_seq, weight, h_seq, x_seq, ctx.sg_fn, ctx.bwd_inplace
         )
-        return grad_x_seq, grad_weight, grad_bias
+        return grad_x_seq, grad_weight, grad_bias, None, None, None

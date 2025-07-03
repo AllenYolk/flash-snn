@@ -7,7 +7,7 @@ import torch.nn as nn
 import triton
 from spikingjelly.activation_based import surrogate, functional, neuron
 
-from flashsnn.ops import plif
+from flashsnn.ops import plif, surrogate_kernels
 
 DEVICE = "cuda"
 DTYPE = torch.float32
@@ -153,8 +153,8 @@ def bacnmark(T, NCL, neuron_type):
         beta = torch.tensor(0.5, device=DEVICE, dtype=DTYPE, requires_grad=True)
         results = triton.testing.do_bench(
             lambda: f(
-                x,
-                beta.expand(x.shape),
+                x, beta.expand(x.shape), surrogate_kernels.
+                atan_surrogate_backward, False, False
             ).backward(grad_y),
             quantiles=QUANTILES
         )

@@ -9,6 +9,18 @@ from flashsnn.utils import type_dict, contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 
 
+@triton.jit
+def _sigmoid_forward(x, dtype: tl.constexpr):
+    return tl.sigmoid(x.to(tl.float32)).to(dtype)
+
+
+@triton.jit
+def _sigmoid_backward(y):
+    # y = sigmoid(x)
+    y = y * (1.-y)
+    return y
+
+
 @triton.autotune(
     configs=[
         triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
@@ -21,7 +33,7 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 @triton.jit
 def _multistep_pli_forward_iterative_kernel(
     x_seq_ptr,  # [T, NCL]
-    beta_seq_ptr,  # [T, NCL], after applying sigmoid
+    beta_seq_ptr,  # [T, NCL], before applying sigmoid
     y_seq_ptr,
     T: tl.constexpr,
     NCL: tl.constexpr,
@@ -52,6 +64,7 @@ def _multistep_pli_forward_iterative_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
+        beta = _sigmoid_forward(beta, dtype)
 
         y = tl.fma(beta, y, x)  # fused element-wise multiply-add
 
@@ -124,9 +137,10 @@ def _multistep_pli_backward_iterative_kernel(
             order=(1, 0)
         )
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
+        beta = _sigmoid_forward(beta, dtype)
 
         dy = tl.fma(beta, dy, grad_y)
-        d_beta = dy * y_last
+        d_beta = dy * y_last * _sigmoid_backward(beta)
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,
@@ -148,10 +162,12 @@ def _multistep_pli_backward_iterative_kernel(
         tl.store(grad_beta_ptrs, d_beta, boundary_check=(1,))
 
 
-def multistep_pli_forward_iterative(x_seq: torch.Tensor, beta: torch.Tensor):
+def multistep_pli_forward_iterative(
+    x_seq: torch.Tensor, beta: torch.Tensor, inplace: bool = False
+):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
-    y_seq = torch.empty_like(x_seq)
+    y_seq = x_seq if inplace else torch.empty_like(x_seq)
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
@@ -167,11 +183,14 @@ def multistep_pli_forward_iterative(x_seq: torch.Tensor, beta: torch.Tensor):
 
 
 def multistep_pli_backward_iterative(
-    grad_y_seq: torch.Tensor, beta: torch.Tensor, y_seq: torch.Tensor
+    grad_y_seq: torch.Tensor,
+    beta: torch.Tensor,
+    y_seq: torch.Tensor,
+    inplace: bool = False
 ):
     T = grad_y_seq.shape[0]
     NCL = grad_y_seq[0].numel()
-    grad_x_seq = torch.empty_like(grad_y_seq)
+    grad_x_seq = grad_y_seq if inplace else torch.empty_like(grad_y_seq)
     grad_beta = torch.empty_like(beta)
     dtype = grad_y_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -194,11 +213,15 @@ class MultistepPLIIterativeFunction(autograd.Function):
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_fwd
-    def forward(ctx, x_seq: torch.Tensor, beta: torch.Tensor):
+    def forward(
+        ctx, x_seq: torch.Tensor, beta: torch.Tensor, fwd_inplace: bool,
+        bwd_inplace: bool
+    ):
         """beta.shape=[T, NCL]; after applying sigmoid"""
-        y_seq = multistep_pli_forward_iterative(x_seq, beta)
+        y_seq = multistep_pli_forward_iterative(x_seq, beta, fwd_inplace)
         if any(ctx.needs_input_grad):
             ctx.save_for_backward(y_seq, beta)
+            ctx.bwd_inplace = bwd_inplace
         return y_seq
 
     @staticmethod
@@ -207,6 +230,6 @@ class MultistepPLIIterativeFunction(autograd.Function):
     def backward(ctx, grad_y_seq: torch.Tensor):
         y_seq, beta = ctx.saved_tensors
         grad_x_seq, grad_beta = multistep_pli_backward_iterative(
-            grad_y_seq, beta, y_seq
+            grad_y_seq, beta, y_seq, ctx.bwd_inplace
         )
-        return grad_x_seq, grad_beta
+        return grad_x_seq, grad_beta, None, None

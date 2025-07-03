@@ -126,10 +126,7 @@ def bacnmark(T, NCL, implementation):
             BETA, device=DEVICE, dtype=DTYPE, requires_grad=True
         )
         results = triton.testing.do_bench(
-            lambda: f(
-                x,
-                torch.sigmoid(beta).expand(x.shape),
-            ).backward(grad_y),
+            lambda: f(x, beta.expand(x.shape), False, False).backward(grad_y),
             quantiles=QUANTILES
         )
 

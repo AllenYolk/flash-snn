@@ -251,10 +251,12 @@ def _multistep_lif_soft_detached_backward_kernel(
         grad_v = grad_v * beta
 
 
-def multistep_lif_soft_inference(x_seq: torch.Tensor, beta: float):
+def multistep_lif_soft_inference(
+    x_seq: torch.Tensor, beta: float, inplace: bool = False
+):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
-    s_seq = torch.empty_like(x_seq)
+    s_seq = x_seq if inplace else torch.empty_like(x_seq)
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
@@ -269,10 +271,12 @@ def multistep_lif_soft_inference(x_seq: torch.Tensor, beta: float):
     return s_seq
 
 
-def multistep_lif_soft_forward(x_seq: torch.Tensor, beta: float):
+def multistep_lif_soft_forward(
+    x_seq: torch.Tensor, beta: float, inplace: bool = False
+):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
-    s_seq = torch.empty_like(x_seq)
+    s_seq = x_seq if inplace else torch.empty_like(x_seq)
     h_seq = torch.empty_like(x_seq)
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
@@ -294,10 +298,11 @@ def multistep_lif_soft_not_detached_backward(
     h_seq: torch.Tensor,
     beta: float,
     sn_fn: Callable,
+    inplace: bool = False
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
-    grad_x_seq = torch.empty_like(grad_s_seq)
+    grad_x_seq = grad_s_seq if inplace else torch.empty_like(grad_s_seq)
     dtype = grad_s_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
@@ -319,10 +324,11 @@ def multistep_lif_soft_detached_backward(
     h_seq: torch.Tensor,
     beta: float,
     sg_fn: Callable,
+    inplace: bool = False
 ):
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
-    grad_x_seq = torch.empty_like(grad_s_seq)
+    grad_x_seq = grad_s_seq if inplace else torch.empty_like(grad_s_seq)
     dtype = grad_s_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
@@ -345,18 +351,17 @@ class MultistepLIFSoftNotDetachedFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(
-        ctx,
-        x_seq: torch.Tensor,
-        beta: float,
-        sg_fn: Callable = surrogate_kernels.atan_surrogate_backward
+        ctx, x_seq: torch.Tensor, beta: float, sg_fn: Callable,
+        fwd_inplace: bool, bwd_inplace: bool
     ):
         if any(ctx.needs_input_grad):
-            s_seq, h_seq = multistep_lif_soft_forward(x_seq, beta)
+            s_seq, h_seq = multistep_lif_soft_forward(x_seq, beta, fwd_inplace)
             ctx.save_for_backward(h_seq)
             ctx.beta = beta
             ctx.sg_fn = sg_fn
+            ctx.bwd_inplace = bwd_inplace
         else:
-            s_seq = multistep_lif_soft_inference(x_seq, beta)
+            s_seq = multistep_lif_soft_inference(x_seq, beta, fwd_inplace)
         return s_seq
 
     @staticmethod
@@ -365,9 +370,9 @@ class MultistepLIFSoftNotDetachedFunction(autograd.Function):
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq = ctx.saved_tensors[0]
         grad_x_seq = multistep_lif_soft_not_detached_backward(
-            grad_s_seq, h_seq, ctx.beta, ctx.sg_fn
+            grad_s_seq, h_seq, ctx.beta, ctx.sg_fn, ctx.bwd_inplace
         )
-        return grad_x_seq, None
+        return grad_x_seq, None, None, None, None
 
 
 class MultistepLIFSoftDetachedFunction(autograd.Function):
@@ -376,18 +381,17 @@ class MultistepLIFSoftDetachedFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(
-        ctx,
-        x_seq: torch.Tensor,
-        beta: float,
-        sg_fn: Callable = surrogate_kernels.atan_surrogate_backward
+        ctx, x_seq: torch.Tensor, beta: float, sg_fn: Callable,
+        fwd_inplace: bool, bwd_inplace: bool
     ):
         if any(ctx.needs_input_grad):
-            s_seq, h_seq = multistep_lif_soft_forward(x_seq, beta)
+            s_seq, h_seq = multistep_lif_soft_forward(x_seq, beta, fwd_inplace)
             ctx.save_for_backward(h_seq)
             ctx.beta = beta
             ctx.sg_fn = sg_fn
+            ctx.bwd_inplace = bwd_inplace
         else:
-            s_seq = multistep_lif_soft_inference(x_seq, beta)
+            s_seq = multistep_lif_soft_inference(x_seq, beta, fwd_inplace)
         return s_seq
 
     @staticmethod
@@ -396,6 +400,6 @@ class MultistepLIFSoftDetachedFunction(autograd.Function):
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq = ctx.saved_tensors[0]
         grad_x_seq = multistep_lif_soft_detached_backward(
-            grad_s_seq, h_seq, ctx.beta, ctx.sg_fn
+            grad_s_seq, h_seq, ctx.beta, ctx.sg_fn, ctx.bwd_inplace
         )
-        return grad_x_seq, None
+        return grad_x_seq, None, None, None, None
