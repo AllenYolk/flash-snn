@@ -40,6 +40,7 @@ kernel_template = """{core_str}
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=[{autotune_restore}],
 )
 @triton.jit
 def flexsn_{kernel_type}_kernel_{hash}(
@@ -81,6 +82,9 @@ def get_flexsn_inference_kernel(
     return_signature = f",\n{INDENTATION}".join([
         f"s{i}_seq_ptr" for i in range(num_outputs)
     ])
+    autotune_restore = f", ".join([
+        f'"s{i}_seq_ptr"' for i in range(num_states)
+    ])
     state_initialization = f"\n{INDENTATION}".join([
         f"v{i} = tl.zeros([1, BLOCK_NCL], dtype=dtype)"
         for i in range(num_states)
@@ -100,6 +104,7 @@ def get_flexsn_inference_kernel(
 
     kernel_str = kernel_template.format(
         core_str=core_str,
+        autotune_restore=autotune_restore,
         kernel_type="inference",
         hash=hash,
         input_signature=input_signature,
@@ -145,6 +150,7 @@ def get_flexsn_forward_kernel(
     return_signature = f",\n{INDENTATION}".join([
         f"{r}_seq_ptr" for r in fwd_kernel_returns
     ])
+    autotune_restore = ", ".join([f'"{s}_seq_ptr"' for s in fwd_kernel_returns])
     state_initialization = f"\n{INDENTATION}".join([
         f"v{i} = tl.zeros([1, BLOCK_NCL], dtype=dtype)"
         for i in range(num_states)
@@ -162,6 +168,7 @@ def get_flexsn_forward_kernel(
 
     kernel_str = kernel_template.format(
         core_str=core_str,
+        autotune_restore=autotune_restore,
         kernel_type="forward",
         hash=hash,
         input_signature=input_signature,
@@ -213,6 +220,10 @@ def get_flexsn_backward_kernel(
         f"grad_x{i}_seq_ptr" for i in range(num_inputs)
     ])
 
+    autotune_restore = f", ".join([
+        f'"grad_x{i}_seq_ptr"' for i in range(num_inputs)
+    ])
+
     state_initialization = f"\n{INDENTATION}".join([
         f"grad_v{i} = tl.zeros([1, BLOCK_NCL], dtype=dtype)"
         for i in range(num_states)
@@ -239,6 +250,7 @@ def get_flexsn_backward_kernel(
 
     kernel_str = kernel_template.format(
         core_str=core_str,
+        autotune_restore=autotune_restore,
         kernel_type="backward",
         hash=hash,
         input_signature=input_signature,

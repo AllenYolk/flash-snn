@@ -16,6 +16,7 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["y_seq_ptr"],
 )
 @triton.jit
 def _multistep_li_forward_iterative_kernel(
@@ -64,6 +65,7 @@ def _multistep_li_forward_iterative_kernel(
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["grad_x_seq_ptr"],
 )
 @triton.jit
 def _multistep_li_backward_iterative_kernel(

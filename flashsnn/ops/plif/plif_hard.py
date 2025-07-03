@@ -30,6 +30,7 @@ def _sigmoid_backward(y):
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["s_seq_ptr"],
 )
 @triton.jit
 def _multistep_plif_hard_inference_kernel(
@@ -89,6 +90,7 @@ def _multistep_plif_hard_inference_kernel(
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["s_seq_ptr", "h_seq_ptr", "v_seq_ptr"],
 )
 @triton.jit
 def _multistep_plif_hard_forward_kernel(
@@ -168,6 +170,7 @@ def _multistep_plif_hard_forward_kernel(
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["grad_x_seq_ptr", "grad_beta_seq_ptr"],
 )
 @triton.jit
 def _multistep_plif_hard_not_detached_backward_kernel(
@@ -276,6 +279,7 @@ def _multistep_plif_hard_not_detached_backward_kernel(
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["grad_x_seq_ptr", "grad_beta_seq_ptr"],
 )
 @triton.jit
 def _multistep_plif_hard_detached_backward_kernel(

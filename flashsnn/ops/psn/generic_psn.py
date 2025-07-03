@@ -22,9 +22,12 @@ def _get_block_t_size(T):
 
 @triton.autotune(
     configs=[
-        triton.Config({"BLOCK_NCL": w * 32}, num_warps=w) for w in [2, 4, 8]
+        triton.Config({"BLOCK_NCL": b}, num_warps=w)
+        for b in [64, 128, 256]
+        for w in [2, 4, 8]
     ],
     key=["BLOCK_T", "dtype"],
+    restore_value=["s_seq_ptr"]
 )
 @triton.jit
 def _psn_inference_kernel(
@@ -91,9 +94,12 @@ def _psn_inference_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({"BLOCK_NCL": w * 32}, num_warps=w) for w in [2, 4, 8]
+        triton.Config({"BLOCK_NCL": b}, num_warps=w)
+        for b in [64, 128, 256]
+        for w in [2, 4, 8]
     ],
     key=["BLOCK_T", "dtype"],
+    restore_value=["s_seq_ptr", "h_seq_ptr"]
 )
 @triton.jit
 def _psn_forward_kernel(
@@ -168,8 +174,15 @@ def _psn_forward_kernel(
     tl.store(h_ptrs, h_seq, boundary_check=(0, 1))
 
 
-# Autotune should be disabled if atomic_add is used.
-# Otherwise, the shared memory might be written multiple times!
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_NCL": b}, num_warps=w)
+        for b in [64, 128, 256]
+        for w in [2, 4, 8]
+    ],
+    key=["BLOCK_T", "dtype"],
+    restore_value=["grad_x_seq_ptr", "grad_weight_ptr", "grad_bias_ptr"]
+)
 @triton.jit
 def _psn_backward_kernel_with_atomic(
     grad_s_seq_ptr,  # [T, NCL]
@@ -265,6 +278,7 @@ def _psn_backward_kernel_with_atomic(
 @triton.autotune(
     configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8]],
     key=["BLOCK_T", "BLOCK_NCL", "dtype"],
+    restore_value=["grad_x_seq_ptr", "grad_weight_ptr", "grad_bias_ptr"]
 )
 @triton.jit
 def _psn_backward_kernel_without_atomic(
@@ -283,7 +297,7 @@ def _psn_backward_kernel_without_atomic(
     dtype: tl.constexpr,
     sg_fn: tl.constexpr,
 ):
-    """Used when atomic_add is not available."""
+    """Used when atomic_add is not available (e.g. on 1050 Ti)."""
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
 
@@ -433,8 +447,7 @@ def psn_backward_with_atomic(
     T = grad_s_seq.shape[0]
     NCL = grad_s_seq[0].numel()
     BLOCK_T = _get_block_t_size(T)
-    BLOCK_NCL = 64  # BLOCK_NCL must be explicitly specified
-    N_BLOCK_NCL = triton.cdiv(NCL, BLOCK_NCL)
+    grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
     dtype = grad_s_seq.dtype
     grad_x_seq = torch.empty_like(grad_s_seq)
     grad_weight = torch.zeros(
@@ -448,7 +461,7 @@ def psn_backward_with_atomic(
         device=grad_s_seq.device,
     )  # shape=[T, 1]
 
-    _psn_backward_kernel_with_atomic[(N_BLOCK_NCL,)](
+    _psn_backward_kernel_with_atomic[grid](
         grad_s_seq,
         weight,
         h_seq,
@@ -459,7 +472,6 @@ def psn_backward_with_atomic(
         T=T,
         NCL=NCL,
         BLOCK_T=BLOCK_T,
-        BLOCK_NCL=BLOCK_NCL,
         dtype=type_dict[dtype],
         sg_fn=sg_fn,
     )

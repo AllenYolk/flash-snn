@@ -17,6 +17,7 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["s_seq_ptr"],
 )
 @triton.jit
 def _multistep_lif_hard_inference_kernel(
@@ -67,6 +68,7 @@ def _multistep_lif_hard_inference_kernel(
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["s_seq_ptr", "h_seq_ptr"],
 )
 @triton.jit
 def _multistep_lif_hard_forward_kernel(
@@ -127,6 +129,7 @@ def _multistep_lif_hard_forward_kernel(
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["grad_x_seq_ptr"],
 )
 @triton.jit
 def _multistep_lif_hard_not_detached_backward_kernel(
@@ -201,6 +204,7 @@ def _multistep_lif_hard_not_detached_backward_kernel(
         for w in [2, 4, 8]
     ],
     key=["T", "dtype"],
+    restore_value=["grad_x_seq_ptr"],
 )
 @triton.jit
 def _multistep_lif_hard_detached_backward_kernel(
