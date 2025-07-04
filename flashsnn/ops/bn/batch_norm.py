@@ -19,10 +19,18 @@ from flashsnn.utils import contiguous_and_device_guard, type_dict
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 
 
+def get_block_size(N, C, L):
+    max_block_size = 16384 if C > 256 else 1024  # tuned by grid search
+    BLOCK_L = triton.next_power_of_2(L)
+    BLOCK_L = min(max_block_size, BLOCK_L)
+    BLOCK_N = triton.cdiv(max_block_size, BLOCK_L)
+    return BLOCK_N, BLOCK_L
+
+
 @triton.autotune(
     configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8, 16]],
     key=[
-        "N", "C", "L", "BLOCK_L", "affine", "track_running_stats", "is_train",
+        "BLOCK_N", "BLOCK_L", "affine", "track_running_stats", "is_train",
         "dtype", "stats_dtype"
     ],
     restore_value=[
@@ -30,9 +38,6 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
         "running_var_ptr"
     ]
 )
-@triton.heuristics({
-    "BLOCK_L": lambda args: min(triton.next_power_of_2(args["L"]), 2048)
-})
 @triton.jit
 def batch_norm_forward_kernel(
     input_ptr,
@@ -52,7 +57,8 @@ def batch_norm_forward_kernel(
     save_stats: tl.constexpr,
     track_running_stats: tl.constexpr,
     is_train: tl.constexpr,
-    BLOCK_L: tl.constexpr,  # actually chunk size
+    BLOCK_N: tl.constexpr,
+    BLOCK_L: tl.constexpr,  # i.e. chunk size
     dtype: tl.constexpr,
     running_stats_dtype: tl.constexpr,
 ):
@@ -61,7 +67,7 @@ def batch_norm_forward_kernel(
 
     input.shape = [N, C, L]. For each program, block shape is [N, 1, L] (i.e. 
     one program for each channel). Each block is split into chunks with shape
-    [1, 1, BLOCK_L], and a double-loop is used to calculate the stats.
+    [BLOCK_N, 1, BLOCK_L], and a double-loop is used to calculate the stats.
 
     Notice that BN always use float32 for computation. We should cast the values
     to target dtypes before storing them. That's why we introduce `dtype` and
@@ -76,21 +82,21 @@ def batch_norm_forward_kernel(
         mean = 0.0
         var = 0.0
 
-        # if static_ranage(0, N, 1), the compilation time cost is unaffordable
-        for n in tl.range(0, N, 1):
+        # if static_ranage on N, the compilation time cost is unaffordable!
+        for n_start in tl.range(0, N, BLOCK_N):
             for l_start in tl.static_range(0, L, BLOCK_L):
                 x_ptr = tl.make_block_ptr(
                     input_ptr,
                     shape=(N, C, L),
                     strides=(SN, SC, SL),
-                    offsets=(n, c, l_start),
-                    block_shape=(1, 1, BLOCK_L),
+                    offsets=(n_start, c, l_start),
+                    block_shape=(BLOCK_N, 1, BLOCK_L),
                     order=(2, 1, 0)
                 )
-                x = tl.load(x_ptr, boundary_check=(2,), padding_option="zero")
+                x = tl.load(x_ptr, boundary_check=(0, 2), padding_option="zero")
                 x = x.to(tl.float32)
 
-                cnt = min(BLOCK_L, L - l_start)
+                cnt = min(BLOCK_L, L - l_start) * min(BLOCK_N, N - n_start)
                 count += cnt
 
                 prev_mean = mean
@@ -127,17 +133,17 @@ def batch_norm_forward_kernel(
         weight = tl.load(weight_ptr + c)  # scalar
         bias = tl.load(bias_ptr + c)
 
-    for n in tl.range(0, N, 1):
+    for n_start in tl.range(0, N, BLOCK_N):
         for l_start in tl.static_range(0, L, BLOCK_L):
             x_ptr = tl.make_block_ptr(
                 input_ptr,
                 shape=(N, C, L),
                 strides=(SN, SC, SL),
-                offsets=(n, c, l_start),
-                block_shape=(1, 1, BLOCK_L),
+                offsets=(n_start, c, l_start),
+                block_shape=(BLOCK_N, 1, BLOCK_L),
                 order=(2, 1, 0)
             )
-            x = tl.load(x_ptr, boundary_check=(2,), padding_option="zero")
+            x = tl.load(x_ptr, boundary_check=(0, 2), padding_option="zero")
             x = x.to(tl.float32)
 
             y = (x-mean) * inv_std
@@ -148,21 +154,20 @@ def batch_norm_forward_kernel(
                 output_ptr,
                 shape=(N, C, L),
                 strides=(SN, SC, SL),
-                offsets=(n, c, l_start),
-                block_shape=(1, 1, BLOCK_L),
+                offsets=(n_start, c, l_start),
+                block_shape=(BLOCK_N, 1, BLOCK_L),
                 order=(2, 1, 0)
             )
-            tl.store(y_ptr, y.to(dtype), boundary_check=(2,))
+            tl.store(y_ptr, y.to(dtype), boundary_check=(0, 2))
+            # tl.store supports implicit type casting for pointer blocks,
+            # but not for block pointers! (3.3.1)
 
 
 @triton.autotune(
     configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8, 16]],
-    key=["N", "C", "L", "BLOCK_L", "affine", "dtype", "grad_weight_dtype"],
+    key=["BLOCK_N", "BLOCK_L", "affine", "dtype", "grad_weight_dtype"],
     restore_value=["grad_input_ptr", "grad_weight_ptr", "grad_bias_ptr"]
 )
-@triton.heuristics({
-    "BLOCK_L": lambda args: min(triton.next_power_of_2(args["L"]), 2048)
-})
 @triton.jit
 def batch_norm_backward_kernel(
     grad_output_ptr,
@@ -177,6 +182,7 @@ def batch_norm_backward_kernel(
     C: tl.constexpr,
     L: tl.constexpr,
     affine: tl.constexpr,
+    BLOCK_N: tl.constexpr,
     BLOCK_L: tl.constexpr,
     dtype: tl.constexpr,
     grad_weight_dtype: tl.constexpr,
@@ -191,28 +197,28 @@ def batch_norm_backward_kernel(
 
     term1 = 0.0
     term2 = 0.0
-    for n in tl.range(0, N, 1):
+    for n_start in tl.range(0, N, BLOCK_N):
         for l_start in tl.static_range(0, L, BLOCK_L):
             x_ptr = tl.make_block_ptr(
                 input_ptr,
                 shape=(N, C, L),
                 strides=(SN, SC, SL),
-                offsets=(n, c, l_start),
-                block_shape=(1, 1, BLOCK_L),
+                offsets=(n_start, c, l_start),
+                block_shape=(BLOCK_N, 1, BLOCK_L),
                 order=(2, 1, 0)
             )
-            x = tl.load(x_ptr, boundary_check=(2,), padding_option="zero")
+            x = tl.load(x_ptr, boundary_check=(0, 2), padding_option="zero")
             x = x.to(tl.float32)
             grad_y_ptr = tl.make_block_ptr(
                 grad_output_ptr,
                 shape=(N, C, L),
                 strides=(SN, SC, SL),
-                offsets=(n, c, l_start),
-                block_shape=(1, 1, BLOCK_L),
+                offsets=(n_start, c, l_start),
+                block_shape=(BLOCK_N, 1, BLOCK_L),
                 order=(2, 1, 0)
             )
             grad_y = tl.load(
-                grad_y_ptr, boundary_check=(2,), padding_option="zero"
+                grad_y_ptr, boundary_check=(0, 2), padding_option="zero"
             )
             grad_y = grad_y.to(tl.float32)
 
@@ -230,28 +236,28 @@ def batch_norm_backward_kernel(
     term1 *= weight / NUMEL
     term2 *= weight / NUMEL
 
-    for n in tl.range(0, N, 1):
+    for n_start in tl.range(0, N, BLOCK_N):
         for l_start in tl.static_range(0, L, BLOCK_L):
             x_ptr = tl.make_block_ptr(
                 input_ptr,
                 shape=(N, C, L),
                 strides=(SN, SC, SL),
-                offsets=(n, c, l_start),
-                block_shape=(1, 1, BLOCK_L),
+                offsets=(n_start, c, l_start),
+                block_shape=(BLOCK_N, 1, BLOCK_L),
                 order=(2, 1, 0)
             )
-            x = tl.load(x_ptr, boundary_check=(2,), padding_option="zero")
+            x = tl.load(x_ptr, boundary_check=(0, 2), padding_option="zero")
             x = x.to(tl.float32)
             grad_y_ptr = tl.make_block_ptr(
                 grad_output_ptr,
                 shape=(N, C, L),
                 strides=(SN, SC, SL),
-                offsets=(n, c, l_start),
-                block_shape=(1, 1, BLOCK_L),
+                offsets=(n_start, c, l_start),
+                block_shape=(BLOCK_N, 1, BLOCK_L),
                 order=(2, 1, 0)
             )
             grad_y = tl.load(
-                grad_y_ptr, boundary_check=(2,), padding_option="zero"
+                grad_y_ptr, boundary_check=(0, 2), padding_option="zero"
             )
             grad_y = grad_y.to(tl.float32)
 
@@ -262,11 +268,11 @@ def batch_norm_backward_kernel(
                 grad_input_ptr,
                 shape=(N, C, L),
                 strides=(SN, SC, SL),
-                offsets=(n, c, l_start),
-                block_shape=(1, 1, BLOCK_L),
+                offsets=(n_start, c, l_start),
+                block_shape=(BLOCK_N, 1, BLOCK_L),
                 order=(2, 1, 0)
             )
-            tl.store(grad_x_ptr, grad_x.to(dtype), boundary_check=(2,))
+            tl.store(grad_x_ptr, grad_x.to(dtype), boundary_check=(0, 2))
 
             if affine:
                 weight_grad += tl.sum(grad_y * y)
@@ -295,7 +301,6 @@ class BatchNormFunction(autograd.Function):
         track_running_stats: bool = True,
     ) -> torch.Tensor:
         input_3d = input.unsqueeze(-1).reshape(*input.shape[:2], -1)
-        transpose = False
 
         affine = (weight is not None) and (bias is not None)
         requires_grad = (
@@ -315,6 +320,8 @@ class BatchNormFunction(autograd.Function):
         running_mean = input if (running_mean is None) else running_mean
         running_var = input if (running_var is None) else running_var
 
+        BLOCK_N, BLOCK_L = get_block_size(N, C, L)
+
         batch_norm_forward_kernel[(C,)](
             input_3d,
             weight,
@@ -333,6 +340,8 @@ class BatchNormFunction(autograd.Function):
             save_stats=requires_grad,
             track_running_stats=track_running_stats,
             is_train=training,
+            BLOCK_N=BLOCK_N,
+            BLOCK_L=BLOCK_L,
             dtype=type_dict[output.dtype],
             running_stats_dtype=type_dict[running_mean.dtype]
         )
@@ -358,6 +367,8 @@ class BatchNormFunction(autograd.Function):
         else:
             grad_weight = grad_bias = None
 
+        BLOCK_N, BLOCK_L = get_block_size(N, C, L)
+
         batch_norm_backward_kernel[(C,)](
             grad_output,
             input_3d,
@@ -371,6 +382,8 @@ class BatchNormFunction(autograd.Function):
             C,
             L,
             ctx.affine,
+            BLOCK_N,
+            BLOCK_L,
             dtype=type_dict[grad_input.dtype],
             grad_weight_dtype=type_dict[grad_weight.dtype],
         )
