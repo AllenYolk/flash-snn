@@ -15,7 +15,7 @@ QUANTILES = [0.5, 0.2, 0.8]
 
 
 def get_plif_autograd_function():
-    return getattr(plif, f"MultistepPLIFHardDetachedFunction").apply
+    return getattr(plif, f"MultistepPLIFHardFunction").apply
 
 
 class VanillaPLIF(nn.Module):
@@ -154,7 +154,7 @@ def bacnmark(T, NCL, neuron_type):
         results = triton.testing.do_bench(
             lambda: f(
                 x, beta.expand(x.shape), surrogate_kernels.
-                atan_surrogate_backward, False, False
+                atan_surrogate_backward, True, False, False
             ).backward(grad_y),
             quantiles=QUANTILES
         )

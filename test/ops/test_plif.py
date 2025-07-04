@@ -20,18 +20,13 @@ INPLACE_LIST = [True, False]
 torch.manual_seed(2025)
 
 
-def get_plif_autograd_function(detach_reset: bool, soft_reset: bool):
+def get_plif_autograd_function(soft_reset: bool):
     if soft_reset:
         s2 = "Soft"
     else:
         s2 = "Hard"
 
-    if detach_reset:
-        s3 = "Detached"
-    else:
-        s3 = "NotDetached"
-
-    return getattr(plif, f"MultistepPLIF{s2}{s3}Function").apply
+    return getattr(plif, f"MultistepPLIF{s2}Function").apply
 
 
 class VanillaPLIF(nn.Module):
@@ -88,13 +83,14 @@ def test_lif_ops(
     grad_y_1 = torch.randn_like(x_seq_1)
     grad_y_2 = grad_y_1.clone().detach()
 
-    f1 = get_plif_autograd_function(detach_reset, soft_reset)
+    f1 = get_plif_autograd_function(soft_reset)
     beta1 = torch.tensor(
         beta_init, device="cuda", dtype=dtype, requires_grad=True
     )
     y1 = f1(
         x_seq_1, beta1.expand(x_seq_1.shape),
-        surrogate_kernels.atan_surrogate_backward, inplace, inplace
+        surrogate_kernels.atan_surrogate_backward, detach_reset, inplace,
+        inplace
     )
     y1.backward(grad_y_1)
 
