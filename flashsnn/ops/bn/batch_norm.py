@@ -159,8 +159,6 @@ def batch_norm_forward_kernel(
                 order=(2, 1, 0)
             )
             tl.store(y_ptr, y.to(dtype), boundary_check=(0, 2))
-            # tl.store supports implicit type casting for pointer blocks,
-            # but not for block pointers! (3.3.1)
 
 
 @triton.autotune(

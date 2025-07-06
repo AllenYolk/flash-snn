@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import triton
 
-from flashsnn.ops import leaky_integrator
+from flashsnn.ops import pli
 
 DEVICE = "cuda"
 DTYPE = torch.float32
@@ -121,7 +121,7 @@ def bacnmark(T, NCL, implementation):
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )
     elif implementation == "triton":
-        f = leaky_integrator.MultistepPLIIterativeFunction.apply
+        f = pli.MultistepPLIFunction.apply
         beta = torch.tensor(
             BETA, device=DEVICE, dtype=DTYPE, requires_grad=True
         )

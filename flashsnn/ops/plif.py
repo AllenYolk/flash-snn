@@ -170,9 +170,9 @@ def _multistep_plif_forward_kernel(
         tl.store(v_ptrs, v, boundary_check=(1,))
 
 
-# We implement hard-reset backward and soft-reset backward separately, since
-# their signatures are different. For soft-reset backward, the spikes are not
-# needed to compute the gradients.
+#! We implement hard-reset backward and soft-reset backward separately, since
+#! their signatures are different. For soft-reset backward, the spikes are not
+#! needed to compute the gradients.
 
 
 @triton.autotune(
