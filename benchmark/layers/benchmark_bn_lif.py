@@ -7,7 +7,8 @@ import torch.nn as nn
 import triton
 from spikingjelly.activation_based import surrogate
 
-from flashsnn.ops import bn, lif, surrogate_kernels
+from flashsnn.ops import lif, surrogate_kernels
+from flashsnn.layers import bn
 
 DEVICE = "cuda"
 DTYPE = torch.float32

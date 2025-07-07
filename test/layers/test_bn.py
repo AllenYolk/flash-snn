@@ -6,7 +6,7 @@ sys.path.append("./")
 import torch
 import torch.nn as nn
 
-from flashsnn.ops import bn
+from flashsnn.layers import bn
 from flashsnn.utils import assert_close
 
 DTYPE_LIST = [torch.float16, torch.float32]

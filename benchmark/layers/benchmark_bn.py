@@ -7,7 +7,7 @@ import torch.nn as nn
 import triton
 
 from attorch import nn as attnn
-from flashsnn.ops import bn
+from flashsnn.layers import bn
 
 DEVICE = "cuda"
 DTYPE = torch.float32
