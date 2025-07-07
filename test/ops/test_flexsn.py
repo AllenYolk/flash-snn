@@ -9,7 +9,7 @@ from spikingjelly.activation_based import surrogate
 
 from flashsnn import torch2triton
 from flashsnn.ops import flexsn, spike_fn
-from flashsnn.ops import lif
+from flashsnn.ops import lif, surrogate_kernels
 from flashsnn.utils import assert_close
 
 BETA_LIST = [0.5, 0.1, 0.9]
@@ -48,7 +48,9 @@ def test_flexsn_inference(beta, shape, dtype):
     )
     s = flexsn.flexsn_inference(f, info["num_outputs"], x)[0]
 
-    ss = lif.MultistepLIFHardDetachedFunction.apply(x, beta)
+    ss = lif.MultistepLIFHardFunction.apply(
+        x, beta, surrogate_kernels.atan_surrogate_backward, True, False, False
+    )
 
     assert_close(s, ss, prefix="spike_lif")
 
@@ -102,7 +104,9 @@ def test_flexsn_forward_backward(beta, shape, dtype):
     s.backward(gs)
 
     # handwritten LIF kernel
-    ss = lif.MultistepLIFHardDetachedFunction.apply(x2, beta)
+    ss = lif.MultistepLIFHardFunction.apply(
+        x2, beta, surrogate_kernels.atan_surrogate_backward, True, False, False
+    )
     ss.backward(gs)
 
     assert_close(s, ss, prefix="spike")

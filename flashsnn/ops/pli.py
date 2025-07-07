@@ -38,7 +38,7 @@ def _multistep_pli_forward_kernel(
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
+    dtype: tl.constexpr,  # x_seq.dtype; might != beta_seq.dtype
 ):
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
@@ -76,7 +76,7 @@ def _multistep_pli_forward_kernel(
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        tl.store(y_ptrs, y, boundary_check=(1,))
+        tl.store(y_ptrs, y.to(dtype), boundary_check=(1,))
 
 
 @triton.autotune(
@@ -98,7 +98,7 @@ def _multistep_pli_backward_kernel(
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
+    dtype: tl.constexpr,  # grad_y_seq.dtype; might != beta_seq or y_seq.dtype
 ):
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
@@ -150,7 +150,7 @@ def _multistep_pli_backward_kernel(
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        tl.store(grad_x_ptrs, dy, boundary_check=(1,))
+        tl.store(grad_x_ptrs, dy.to(dtype), boundary_check=(1,))
         grad_beta_ptrs = tl.make_block_ptr(
             grad_beta_seq_ptr,
             shape=(T, NCL),

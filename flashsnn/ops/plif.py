@@ -5,7 +5,6 @@ from torch import autograd
 import triton
 import triton.language as tl
 
-from flashsnn.ops import surrogate_kernels
 from flashsnn.utils import type_dict, contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 
@@ -28,72 +27,8 @@ def _sigmoid_backward(y):
         for f in [1, 2, 4]
         for w in [2, 4, 8]
     ],
-    key=["T", "dtype", "soft_reset"],
+    key=["T", "dtype", "soft_reset", "save_intermediates"],
     restore_value=["s_seq_ptr"],
-)
-@triton.jit
-def _multistep_plif_inference_kernel(
-    x_seq_ptr,  # [T, NCL]
-    beta_seq_ptr,  # [T, NCL], before applying sigmoid
-    s_seq_ptr,
-    T: tl.constexpr,
-    NCL: tl.constexpr,
-    BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
-    soft_reset: tl.constexpr,
-):
-    pid_ncl = tl.program_id(0)
-    ncl_offset = pid_ncl * BLOCK_NCL
-
-    v = tl.zeros([1, BLOCK_NCL], dtype=dtype)
-
-    for t in tl.static_range(0, T, 1):
-        x_ptrs = tl.make_block_ptr(
-            x_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
-        beta_ptrs = tl.make_block_ptr(
-            beta_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
-        beta = _sigmoid_forward(beta, dtype)
-
-        h = tl.fma(beta, v, x)  # decay_input = False
-        s = (h >= 1.).to(dtype)  # v_th = 1
-        if soft_reset:
-            v = h - s
-        else:
-            v = h * (1.-s)  # hard_reset, v_reset = 0
-
-        s_ptrs = tl.make_block_ptr(
-            s_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        tl.store(s_ptrs, s, boundary_check=(1,))
-
-
-@triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
-        for f in [1, 2, 4]
-        for w in [2, 4, 8]
-    ],
-    key=["T", "dtype", "soft_reset"],
-    restore_value=["s_seq_ptr", "h_seq_ptr", "v_seq_ptr"],
 )
 @triton.jit
 def _multistep_plif_forward_kernel(
@@ -105,8 +40,9 @@ def _multistep_plif_forward_kernel(
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
+    dtype: tl.constexpr,  # x_seq.dtype; might != beta_seq.dtype
     soft_reset: tl.constexpr,
+    save_intermediates: tl.constexpr,
 ):
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
@@ -149,25 +85,26 @@ def _multistep_plif_forward_kernel(
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        h_ptrs = tl.make_block_ptr(
-            h_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        v_ptrs = tl.make_block_ptr(
-            v_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        tl.store(s_ptrs, s, boundary_check=(1,))
-        tl.store(h_ptrs, h, boundary_check=(1,))
-        tl.store(v_ptrs, v, boundary_check=(1,))
+        tl.store(s_ptrs, s, boundary_check=(1,))  # must be dtype
+        if save_intermediates:
+            h_ptrs = tl.make_block_ptr(
+                h_seq_ptr,
+                shape=(T, NCL),
+                strides=(NCL, 1),
+                offsets=(t, ncl_offset),
+                block_shape=(1, BLOCK_NCL),
+                order=(1, 0)
+            )
+            v_ptrs = tl.make_block_ptr(
+                v_seq_ptr,
+                shape=(T, NCL),
+                strides=(NCL, 1),
+                offsets=(t, ncl_offset),
+                block_shape=(1, BLOCK_NCL),
+                order=(1, 0)
+            )
+            tl.store(h_ptrs, h.to(dtype), boundary_check=(1,))
+            tl.store(v_ptrs, v.to(dtype), boundary_check=(1,))
 
 
 #! We implement hard-reset backward and soft-reset backward separately, since
@@ -196,7 +133,7 @@ def _multistep_plif_hard_backward_kernel(
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
+    dtype: tl.constexpr,  # grad_s_seq.dtype; might != beta, h, v, s's dtype
     sg_fn: tl.constexpr,
     detach_reset: tl.constexpr,
 ):
@@ -273,7 +210,7 @@ def _multistep_plif_hard_backward_kernel(
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
+        tl.store(grad_x_ptrs, grad_v.to(dtype), boundary_check=(1,))
 
         grad_beta = grad_v * v_last * _sigmoid_backward(beta)
         grad_beta_ptrs = tl.make_block_ptr(
@@ -309,7 +246,7 @@ def _multistep_plif_soft_backward_kernel(
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
+    dtype: tl.constexpr,  # grad_s_seq.dtype; might != beta, h or v's dtype
     sg_fn: tl.constexpr,
     detach_reset: tl.constexpr,
 ):
@@ -375,7 +312,7 @@ def _multistep_plif_soft_backward_kernel(
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
+        tl.store(grad_x_ptrs, grad_v.to(dtype), boundary_check=(1,))
 
         grad_beta = grad_v * v_last * _sigmoid_backward(beta)
         grad_beta_ptrs = tl.make_block_ptr(
@@ -403,14 +340,17 @@ def multistep_plif_inference(
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    _multistep_plif_inference_kernel[grid](
+    _multistep_plif_forward_kernel[grid](
         x_seq,
         beta,
         s_seq,
+        None,
+        None,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
         soft_reset=soft_reset,
+        save_intermediates=False,
     )
     return s_seq
 
@@ -439,6 +379,7 @@ def multistep_plif_forward(
         NCL=NCL,
         dtype=type_dict[dtype],
         soft_reset=soft_reset,
+        save_intermediates=True,
     )
     return s_seq, h_seq, v_seq
 

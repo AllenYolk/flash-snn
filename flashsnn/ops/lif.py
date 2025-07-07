@@ -15,63 +15,8 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
         for f in [1, 2, 4]
         for w in [2, 4, 8]
     ],
-    key=["T", "dtype", "soft_reset"],
-    restore_value=["s_seq_ptr"],
-)
-@triton.jit
-def _multistep_lif_inference_kernel(
-    x_seq_ptr,  # [T, NCL]
-    s_seq_ptr,
-    beta,
-    T: tl.constexpr,
-    NCL: tl.constexpr,
-    BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
-    soft_reset: tl.constexpr,
-):
-    pid_ncl = tl.program_id(0)
-    ncl_offset = pid_ncl * BLOCK_NCL
-
-    v = tl.zeros([1, BLOCK_NCL], dtype=dtype)
-    beta = tl.full([1], beta, dtype=dtype)
-
-    for t in tl.static_range(0, T, 1):
-        x_ptrs = tl.make_block_ptr(
-            x_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
-
-        h = tl.fma(beta, v, x)  # fused element-wise multiply-add
-        s = (h >= 1.).to(dtype)  # v_th = 1
-        if soft_reset:
-            v = h - s
-        else:
-            v = h * (1.-s)  # hard_reset, v_reset = 0
-
-        s_ptrs = tl.make_block_ptr(
-            s_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        tl.store(s_ptrs, s, boundary_check=(1,))
-
-
-@triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
-        for f in [1, 2, 4]
-        for w in [2, 4, 8]
-    ],
-    key=["T", "dtype", "soft_reset"],
-    restore_value=["s_seq_ptr", "h_seq_ptr"],
+    key=["T", "dtype", "soft_reset", "save_intermediates"],
+    restore_value=["s_seq_ptr"],  # if inplace, we must restore s_seq
 )
 @triton.jit
 def _multistep_lif_forward_kernel(
@@ -84,6 +29,7 @@ def _multistep_lif_forward_kernel(
     BLOCK_NCL: tl.constexpr,
     dtype: tl.constexpr,
     soft_reset: tl.constexpr,
+    save_intermediates: tl.constexpr,
 ):
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
@@ -117,16 +63,17 @@ def _multistep_lif_forward_kernel(
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        h_ptrs = tl.make_block_ptr(
-            h_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
         tl.store(s_ptrs, s, boundary_check=(1,))
-        tl.store(h_ptrs, h, boundary_check=(1,))
+        if save_intermediates:
+            h_ptrs = tl.make_block_ptr(
+                h_seq_ptr,
+                shape=(T, NCL),
+                strides=(NCL, 1),
+                offsets=(t, ncl_offset),
+                block_shape=(1, BLOCK_NCL),
+                order=(1, 0)
+            )
+            tl.store(h_ptrs, h, boundary_check=(1,))
 
 
 #! We implement hard-reset backward and soft-reset backward separately, since
@@ -153,7 +100,7 @@ def _multistep_lif_hard_backward_kernel(
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
+    dtype: tl.constexpr,  # grad_s_seq.dtype; might != h_seq or s_seq.dtype
     sg_fn: tl.constexpr,
     detach_reset: tl.constexpr,
 ):
@@ -210,7 +157,7 @@ def _multistep_lif_hard_backward_kernel(
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
+        tl.store(grad_x_ptrs, grad_v.to(dtype), boundary_check=(1,))
         grad_v = grad_v * beta
 
 
@@ -232,7 +179,7 @@ def _multistep_lif_soft_backward_kernel(
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
+    dtype: tl.constexpr,  # grad_s_seq.dtype; might != h_seq.dtype
     sg_fn: tl.constexpr,
     detach_reset: tl.constexpr,
 ):
@@ -278,7 +225,7 @@ def _multistep_lif_soft_backward_kernel(
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        tl.store(grad_x_ptrs, grad_v, boundary_check=(1,))
+        tl.store(grad_x_ptrs, grad_v.to(dtype), boundary_check=(1,))
         grad_v = grad_v * beta
 
 
@@ -291,14 +238,16 @@ def multistep_lif_inference(
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    _multistep_lif_inference_kernel[grid](
+    _multistep_lif_forward_kernel[grid](
         x_seq,
         s_seq,
+        None,
         beta,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
         soft_reset=soft_reset,
+        save_intermediates=False,
     )
     return s_seq
 
@@ -321,7 +270,8 @@ def multistep_lif_forward(
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
-        soft_reset=soft_reset
+        soft_reset=soft_reset,
+        save_intermediates=True,
     )
     return s_seq, h_seq
 

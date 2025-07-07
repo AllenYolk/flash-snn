@@ -6,7 +6,6 @@ from torch import autograd
 import triton
 import triton.language as tl
 
-from flashsnn.ops import surrogate_kernels
 from flashsnn.utils import type_dict
 from flashsnn.utils import contiguous_and_device_guard
 from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
@@ -26,80 +25,8 @@ def _get_block_t_size(T):
         for b in [64, 128, 256]
         for w in [2, 4, 8]
     ],
-    key=["BLOCK_T", "dtype"],
-    restore_value=["s_seq_ptr"]
-)
-@triton.jit
-def _psn_inference_kernel(
-    x_seq_ptr,  # [T, NCL]
-    weight_ptr,  # [T, T]
-    bias_ptr,  # [T, 1]
-    s_seq_ptr,  # [T, NCL]
-    T: tl.constexpr,
-    NCL: tl.constexpr,
-    BLOCK_T: tl.constexpr,  # >= T
-    BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,
-):
-    pid_ncl = tl.program_id(0)
-    ncl_offset = pid_ncl * BLOCK_NCL
-
-    x_ptrs = tl.make_block_ptr(
-        x_seq_ptr,
-        shape=(T, NCL),
-        strides=(NCL, 1),
-        offsets=(0, ncl_offset),
-        block_shape=(BLOCK_T, BLOCK_NCL),
-        order=(1, 0)
-    )
-    x_seq = tl.load(x_ptrs, boundary_check=(0, 1), padding_option="zero")
-    weight_ptrs = tl.make_block_ptr(
-        weight_ptr,
-        shape=(T, T),
-        strides=(T, 1),
-        offsets=(0, 0),
-        block_shape=(BLOCK_T, BLOCK_T),
-        order=(1, 0)
-    )
-    weight = tl.load(weight_ptrs, boundary_check=(0, 1), padding_option="zero")
-    bias_ptrs = tl.make_block_ptr(
-        bias_ptr,
-        shape=(T, 1),
-        strides=(1, 1),
-        offsets=(0, 0),
-        block_shape=(BLOCK_T, 1),
-        order=(1, 0)
-    )
-    bias = tl.load(bias_ptrs, boundary_check=(0,), padding_option="zero")
-
-    h_seq = tl.dot(
-        weight,
-        x_seq,
-        acc=bias.broadcast_to(BLOCK_T, BLOCK_NCL),
-        out_dtype=dtype,
-        input_precision="ieee"
-    )
-    s_seq = (h_seq >= 0.).to(dtype)
-
-    s_ptrs = tl.make_block_ptr(
-        s_seq_ptr,
-        shape=(T, NCL),
-        strides=(NCL, 1),
-        offsets=(0, ncl_offset),
-        block_shape=(BLOCK_T, BLOCK_NCL),
-        order=(1, 0)
-    )
-    tl.store(s_ptrs, s_seq, boundary_check=(0, 1))
-
-
-@triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_NCL": b}, num_warps=w)
-        for b in [64, 128, 256]
-        for w in [2, 4, 8]
-    ],
-    key=["BLOCK_T", "dtype"],
-    restore_value=["s_seq_ptr", "h_seq_ptr"]
+    key=["BLOCK_T", "dtype", "save_intermediates"],
+    restore_value=["s_seq_ptr"]  # if inplace, we must restore s_seq
 )
 @triton.jit
 def _psn_forward_kernel(
@@ -113,6 +40,7 @@ def _psn_forward_kernel(
     BLOCK_T: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
     dtype: tl.constexpr,
+    save_intermediates: tl.constexpr,
 ):
     pid_ncl = tl.program_id(0)
     ncl_offset = pid_ncl * BLOCK_NCL
@@ -163,15 +91,16 @@ def _psn_forward_kernel(
         order=(1, 0)
     )
     tl.store(s_ptrs, s_seq, boundary_check=(0, 1))
-    h_ptrs = tl.make_block_ptr(
-        h_seq_ptr,
-        shape=(T, NCL),
-        strides=(NCL, 1),
-        offsets=(0, ncl_offset),
-        block_shape=(BLOCK_T, BLOCK_NCL),
-        order=(1, 0)
-    )
-    tl.store(h_ptrs, h_seq, boundary_check=(0, 1))
+    if save_intermediates:
+        h_ptrs = tl.make_block_ptr(
+            h_seq_ptr,
+            shape=(T, NCL),
+            strides=(NCL, 1),
+            offsets=(0, ncl_offset),
+            block_shape=(BLOCK_T, BLOCK_NCL),
+            order=(1, 0)
+        )
+        tl.store(h_ptrs, h_seq, boundary_check=(0, 1))
 
 
 @triton.autotune(
@@ -404,15 +333,17 @@ def psn_inference(
     dtype = x_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    _psn_inference_kernel[grid](
+    _psn_forward_kernel[grid](
         x_seq,
         weight,
         bias,
         s_seq,
+        None,
         T=T,
         NCL=NCL,
         BLOCK_T=BLOCK_T,
         dtype=type_dict[dtype],
+        save_intermediates=False,
     )
     return s_seq
 
@@ -437,6 +368,7 @@ def psn_forward(x_seq: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
         NCL=NCL,
         BLOCK_T=BLOCK_T,
         dtype=type_dict[dtype],
+        save_intermediates=True,
     )
     return s_seq, h_seq
 

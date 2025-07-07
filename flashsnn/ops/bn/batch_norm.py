@@ -31,7 +31,7 @@ def get_block_size(N, C, L):
     configs=[triton.Config({}, num_warps=w) for w in [2, 4, 8, 16]],
     key=[
         "BLOCK_N", "BLOCK_L", "affine", "track_running_stats", "is_train",
-        "dtype", "stats_dtype"
+        "dtype", "running_stats_dtype"
     ],
     restore_value=[
         "output_ptr", "mean_ptr", "inv_std_ptr", "running_mean_ptr",
@@ -115,7 +115,7 @@ def batch_norm_forward_kernel(
                 inv_std_ptr + c, inv_std
             )  # must be float32; no need for casting
 
-        if track_running_stats:  # update stats for inference
+        if track_running_stats:  # update stats
             running_mean_ptr += c
             running_var_ptr += c
             running_mean = tl.load(running_mean_ptr)
@@ -185,7 +185,7 @@ def batch_norm_backward_kernel(
     dtype: tl.constexpr,
     grad_weight_dtype: tl.constexpr,
 ):
-    """The same blocking / chunking strategy as that of the forwward kernel."""
+    """The same blocking / chunking strategy as that of the forward kernel."""
     c = tl.program_id(axis=0)  # a.k.a. pid
     SN, SC, SL = C * L, L, 1  # stride
     NUMEL = N * L  # number of elements in the block
@@ -226,7 +226,7 @@ def batch_norm_backward_kernel(
 
     if affine:
         weight = tl.load(weight_ptr + c)
-        weight_grad = 1.0
+        weight_grad = 0.0
         bias_grad = 0.0
     else:
         weight = 1.

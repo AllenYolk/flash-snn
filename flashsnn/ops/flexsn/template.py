@@ -13,7 +13,8 @@ store_template = """
             block_shape=(1, BLOCK_NCL),
             order=(1, 0)
         )
-        tl.store({name}_ptrs, {name}, boundary_check=(1,))
+        convert_and_store({name}_ptrs, {name}, boundary_check=(1,))
+        # tl.store({name}_ptrs, {name}, boundary_check=(1,))
 """
 
 load_template = """
@@ -30,7 +31,8 @@ load_template = """
         )
 """
 
-kernel_template = """{core_str}
+kernel_template = """from flashsnn.ops.snippets import convert_and_store
+{core_str}
 
 
 @triton.autotune(

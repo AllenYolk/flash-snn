@@ -76,6 +76,15 @@ def get_triton_bn_lif_forward(C):
     return f
 
 
+def get_triton_fused_bn_lif_forward(C):
+
+    def f(x_seq):
+        net = bn.BatchNorm1dLIF(C).to(DEVICE)
+        return net(x_seq)
+
+    return f
+
+
 @triton.testing.perf_report([
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
@@ -85,19 +94,29 @@ def get_triton_bn_lif_forward(C):
         # argument name whose value corresponds to a different line in the plot
         line_arg='implementation',
         # possible values for `line_arg``
-        line_vals=['torch', 'torch-compile', 'torch-partly-compile', "triton"],
+        line_vals=[
+            'torch', 'torch-compile', 'torch-partly-compile', "triton",
+            "triton-fused"
+        ],
         # label name for the lines
         line_names=[
-            'Torch', 'Torch (compile)', 'Torch (partly compile)', 'Triton'
+            'Torch', 'Torch (compile)', 'Torch (partly compile)', 'Triton',
+            "Triton (fused)"
         ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('red', '-.'),
+            ('cyan', ':'),
+            ('orange', '-'),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
-        plot_name="Performance (N=32, C=256, L=64*64)",
+        plot_name="Performance (N=32, C=128, L=64*64)",
         args={
             "N": 32,
-            "C": 256,
+            "C": 128,
             "L": 64 * 64
         },
     ),
@@ -105,17 +124,27 @@ def get_triton_bn_lif_forward(C):
         # argument names to use as an x-axis for the plot
         x_names=['C'],
         # different possible values for `x_name`
-        x_vals=[64 * i for i in range(1, 17)],
+        x_vals=[32 * i for i in range(1, 9)],
         # argument name whose value corresponds to a different line in the plot
         line_arg='implementation',
         # possible values for `line_arg``
-        line_vals=['torch', 'torch-compile', 'torch-partly-compile', "triton"],
+        line_vals=[
+            'torch', 'torch-compile', 'torch-partly-compile', "triton",
+            "triton-fused"
+        ],
         # label name for the lines
         line_names=[
-            'Torch', 'Torch (compile)', 'Torch (partly compile)', 'Triton'
+            'Torch', 'Torch (compile)', 'Torch (partly compile)', 'Triton',
+            "Triton (fused)"
         ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('red', '-.'),
+            ('cyan', ':'),
+            ('orange', '-'),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
         plot_name="Performance (T=4, N=64, L=64*64)",
@@ -133,20 +162,30 @@ def get_triton_bn_lif_forward(C):
         # argument name whose value corresponds to a different line in the plot
         line_arg='implementation',
         # possible values for `line_arg``
-        line_vals=['torch', 'torch-compile', 'torch-partly-compile', "triton"],
+        line_vals=[
+            'torch', 'torch-compile', 'torch-partly-compile', "triton",
+            "triton-fused"
+        ],
         # label name for the lines
         line_names=[
-            'Torch', 'Torch (compile)', 'Torch (partly compile)', 'Triton'
+            'Torch', 'Torch (compile)', 'Torch (partly compile)', 'Triton',
+            "Triton (fused)"
         ],
         # line styles
-        styles=[('green', '-'), ('blue', '--'), ('red', '-.'), ('cyan', ':')],
+        styles=[
+            ('green', ':'),
+            ('blue', '--'),
+            ('red', '-.'),
+            ('cyan', ':'),
+            ('orange', '-'),
+        ],
         ylabel="Execution Time (ms)",  # label name for the y-axis
         # name for the plot. Used also as a file name for saving the plot.
-        plot_name="Performance (T=4, N=64, C=256)",
+        plot_name="Performance (T=4, N=32, C=128)",
         args={
             "T": 4,
             "N": 32,
-            "C": 256
+            "C": 128
         },
     ),
 ])
@@ -165,6 +204,8 @@ def bacnmark(T, N, C, L, implementation):
         f = BNCompiledLIF(C).to(DEVICE)
     elif implementation == "triton":
         f = get_triton_bn_lif_forward(C)
+    elif implementation == "triton-fused":
+        f = get_triton_fused_bn_lif_forward(C)
     results = triton.testing.do_bench(
         lambda: f(x).backward(grad_y), quantiles=QUANTILES
     )
