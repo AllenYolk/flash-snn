@@ -22,8 +22,6 @@ def assert_close(x, y, ratio=0.005, prefix="", err_atol=1e-6):
     err_ratio = get_err_ratio(x, y)
     msg = f"{prefix}: diff={abs_atol:.6f}, ratio={err_ratio:.6f}"
 
-    print(msg)
-
     if abs_atol <= err_atol:
         return
     assert err_ratio < ratio, msg
