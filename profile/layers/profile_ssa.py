@@ -5,13 +5,10 @@ sys.path.append("./")
 import torch
 import torch.nn as nn
 from spikingjelly.activation_based import neuron, functional
-import triton
 
 from flashsnn.layers import ssa
 
 DEVICE = "cuda"
-DTYPE = torch.float32
-QUANTILES = [0.5, 0.2, 0.8]
 
 
 class OriginalSpikingSelfAttention(nn.Module):
@@ -157,124 +154,36 @@ class RefinedSpikingSelfAttention(nn.Module):
         return x_seq
 
 
-@triton.testing.perf_report([
-    triton.testing.Benchmark(
-        # argument names to use as an x-axis for the plot
-        x_names=['T'],
-        # different possible values for `x_name`
-        x_vals=[i for i in range(1, 9)],
-        # argument name whose value corresponds to a different line in the plot
-        line_arg='implementation',
-        # possible values for `line_arg``
-        line_vals=['torch', 'torch-refined', 'triton'],
-        # label name for the lines
-        line_names=['Torch', 'Torch (refined)', 'Triton'],
-        # line styles
-        styles=[
-            ('green', ':'),
-            ('blue', '--'),
-            ('red', '-.'),
-            ('cyan', ':'),
-            ('orange', '-'),
-        ],
-        ylabel="Execution Time (ms)",  # label name for the y-axis
-        # name for the plot. Used also as a file name for saving the plot.
-        plot_name="Performance (N=16, C=256, L=14*14)",
-        args={
-            "N": 16,
-            "C": 256,
-            "L": 14
-        },
-    ),
-    triton.testing.Benchmark(
-        # argument names to use as an x-axis for the plot
-        x_names=['C'],
-        # different possible values for `x_name`
-        x_vals=[64 * i for i in range(1, 9)],
-        # argument name whose value corresponds to a different line in the plot
-        line_arg='implementation',
-        # possible values for `line_arg``
-        line_vals=['torch', 'torch-refined', 'triton'],
-        # label name for the lines
-        line_names=['Torch', 'Torch (refined)', 'Triton'],
-        # line styles
-        styles=[
-            ('green', ':'),
-            ('blue', '--'),
-            ('red', '-.'),
-            ('cyan', ':'),
-            ('orange', '-'),
-        ],
-        ylabel="Execution Time (ms)",  # label name for the y-axis
-        # name for the plot. Used also as a file name for saving the plot.
-        plot_name="Performance (T=4, N=16, L=14*14)",
-        args={
-            "T": 4,
-            "N": 16,
-            "L": 14
-        },
-    ),
-    triton.testing.Benchmark(
-        # argument names to use as an x-axis for the plot
-        x_names=['L'],
-        # different possible values for `x_name`
-        x_vals=[4 * i for i in range(1, 11)],
-        # argument name whose value corresponds to a different line in the plot
-        line_arg='implementation',
-        # possible values for `line_arg``
-        line_vals=['torch', 'torch-refined', 'triton'],
-        # label name for the lines
-        line_names=['Torch', 'Torch (refined)', 'Triton'],
-        # line styles
-        styles=[
-            ('green', ':'),
-            ('blue', '--'),
-            ('red', '-.'),
-            ('cyan', ':'),
-            ('orange', '-'),
-        ],
-        ylabel="Execution Time (ms)",  # label name for the y-axis
-        # name for the plot. Used also as a file name for saving the plot.
-        plot_name="Performance (T=4, N=16, C=256)",
-        args={
-            "T": 4,
-            "N": 16,
-            "C": 256
-        },
-    ),
-])
-def bacnmark(T, N, C, L, implementation):
-    results = 0, 0, 0
-
-    if implementation == "torch":
-        x = torch.randn([T, N, C, L, L], device=DEVICE, dtype=DTYPE)
-        grad_y = torch.randn_like(x)
-        x.requires_grad = True
-        f = OriginalSpikingSelfAttention(dim=C).to(DEVICE)
-        results = triton.testing.do_bench(
-            lambda: f(x).backward(grad_y), quantiles=QUANTILES
-        )
-    elif implementation == "torch-refined":
-        x = torch.randn([T, N, C, L * L], device=DEVICE, dtype=DTYPE)
-        grad_y = torch.randn_like(x)
-        x.requires_grad = True
-        f = RefinedSpikingSelfAttention(dim=C).to(DEVICE)
-        results = triton.testing.do_bench(
-            lambda: f(x).backward(grad_y), quantiles=QUANTILES
-        )
-    elif implementation == "triton":
-        x = torch.randn([T, N, C, L * L], device=DEVICE, dtype=DTYPE)
-        grad_y = torch.randn_like(x)
-        x.requires_grad = True
-        f = ssa.SpikingSelfAttention(dim=C).to(DEVICE)
-        results = triton.testing.do_bench(
-            lambda: f(x).backward(grad_y), quantiles=QUANTILES
-        )
-
-    return results
+def run(x_seq, net):
+    y_seq = net(x_seq)
+    l = y_seq.sum()
+    l.backward()
 
 
 if __name__ == "__main__":
-    bacnmark.run(
-        save_path="./logs/benchmark_ssa", print_data=True, show_plots=True
+    mtype = "refined"
+    T, N, C, L = 4, 8, 512, 14
+
+    x_seq = torch.randn(T, N, C, L, L) if mtype == "original" else torch.randn(
+        T, N, C, L * L
     )
+    x_seq = x_seq.to(DEVICE)
+    x_seq.requires_grad = True
+
+    if mtype == "original":
+        net = OriginalSpikingSelfAttention(C)
+    elif mtype == "refined":
+        net = RefinedSpikingSelfAttention(C)
+    else:
+        net = ssa.SpikingSelfAttention(C)
+    net = net.to(DEVICE)
+
+    with torch.profiler.profile(
+        schedule=torch.profiler.schedule(wait=5, warmup=5, active=3, repeat=1),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(
+            "/tmp", worker_name=mtype
+        ),
+    ) as pf:
+        for _ in range(30):
+            run(x_seq, net)
+            pf.step()

@@ -12,7 +12,6 @@ from typing import Optional
 import triton
 import triton.language as tl
 import torch
-import torch.nn as nn
 import torch.autograd as autograd
 
 from flashsnn.utils import contiguous_and_device_guard, type_dict
@@ -62,9 +61,8 @@ def batch_norm_forward_kernel(
     dtype: tl.constexpr,
     running_stats_dtype: tl.constexpr,
 ):
-    """Batch-normalizes the input, optionally adding a residual and fusing an 
-    activation function.
-
+    """Batch-normalizes the input.
+    
     input.shape = [N, C, L]. For each program, block shape is [N, 1, L] (i.e. 
     one program for each channel). Each block is split into chunks with shape
     [BLOCK_N, 1, BLOCK_L], and a double-loop is used to calculate the stats.
