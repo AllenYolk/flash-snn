@@ -161,7 +161,7 @@ def run(x_seq, net):
 
 
 if __name__ == "__main__":
-    mtype = "refined"
+    mtype = "triton"
     T, N, C, L = 4, 8, 512, 14
 
     x_seq = torch.randn(T, N, C, L, L) if mtype == "original" else torch.randn(
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     with torch.profiler.profile(
         schedule=torch.profiler.schedule(wait=5, warmup=5, active=3, repeat=1),
         on_trace_ready=torch.profiler.tensorboard_trace_handler(
-            "/tmp", worker_name=mtype
+            "./", worker_name=mtype
         ),
     ) as pf:
         for _ in range(30):

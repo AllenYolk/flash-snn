@@ -9,11 +9,24 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 from flashsnn.utils import get_device_capability
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({
+            "BLOCK_LQ": b,
+            "BLOCK_LK": b
+        }, num_warps=w, num_stages=1)
+        for b in [16, 32, 64]
+        for w in [8, 16, 32]
+    ],
+    key=["TN", "NUM_HEADS", "Cph", "L", "BLOCK_Cph", "dtype"],
+    restore_value=["output_ptr"],
+)
 @triton.jit
 def _ssa_forward_kernel(
     qkv_ptr,  # [TN, 3, NUM_HEADS, Cph, L]
     output_ptr,  # [TN, NUM_HEADS, Cph, L]; w
     scale,
+    TN: tl.constexpr,  # for autotune
     NUM_HEADS: tl.constexpr,
     Cph: tl.constexpr,
     L: tl.constexpr,
@@ -109,12 +122,25 @@ def _ssa_forward_kernel(
     tl.store(output_ptrs, acc, boundary_check=(0, 1))
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({
+            "BLOCK_LQ": b,
+            "BLOCK_LK": b
+        }, num_warps=w, num_stages=1)
+        for b in [16, 32, 64]
+        for w in [8, 16, 32]
+    ],
+    key=["TN", "NUM_HEADS", "Cph", "L", "BLOCK_Cph", "dtype"],
+    restore_value=["grad_qkv_ptr"],
+)
 @triton.jit
 def _ssa_backward_kernel_with_atomic(
     grad_output_ptr,  # [TN, NUM_HEADS, Cph, L]
     qkv_ptr,  # [TN, 3, NUM_HEADS, Cph, L]
     grad_qkv_ptr,  # [TN, 3, NUM_HEADS, Cph, L]; w
     scale,
+    TN: tl.constexpr,  # for autotune
     NUM_HEADS: tl.constexpr,
     Cph: tl.constexpr,
     L: tl.constexpr,
@@ -280,126 +306,25 @@ def _ssa_backward_kernel_with_atomic(
     tl.store(grad_q_ptrs, grad_q * scale, boundary_check=(0, 1))
 
 
-@triton.jit
-def _ssa_backward_kernel_without_atomic_q(
-    grad_output_ptr,  # [TN, NUM_HEADS, Cph, L]
-    qkv_ptr,  # [TN, 3, NUM_HEADS, Cph, L]
-    grad_qkv_ptr,  # [TN, 3, NUM_HEADS, Cph, L]; w
-    scale,
-    NUM_HEADS: tl.constexpr,
-    Cph: tl.constexpr,
-    L: tl.constexpr,
-    BLOCK_LQ: tl.constexpr,
-    BLOCK_LK: tl.constexpr,
-    BLOCK_Cph: tl.constexpr,  # >= Cph
-    dtype: tl.constexpr,
-):
-    tn = tl.program_id(0)
-    head = tl.program_id(1)
-    lq_start = tl.program_id(2) * BLOCK_LQ
-
-    # locate the [Cph, L] matrices
-    S_head = Cph * L
-    S_qkv = NUM_HEADS * S_head
-    S_tn = 3 * S_qkv
-    q_base = qkv_ptr + tn*S_tn + head*S_head
-    k_base = q_base + S_qkv
-    v_base = k_base + S_qkv
-    grad_q_base = grad_qkv_ptr + tn*S_tn + head*S_head
-    grad_output_base = grad_output_ptr + tn*S_qkv + head*S_head
-
-    q_ptrs = tl.make_block_ptr(
-        q_base,
-        shape=(Cph, L),
-        strides=(L, 1),
-        offsets=(0, lq_start),
-        block_shape=(BLOCK_Cph, BLOCK_LQ),
-        order=(1, 0)
-    )  # the transpose of the q in the forward kernel
-    qt = tl.load(q_ptrs, boundary_check=(0, 1), padding_option="zero")
-    grad_output_ptrs = tl.make_block_ptr(
-        grad_output_base,
-        shape=(L, Cph),
-        strides=(1, L),
-        offsets=(lq_start, 0),
-        block_shape=(BLOCK_LQ, BLOCK_Cph),
-        order=(1, 0)
-    )
-    grad_output = tl.load(
-        grad_output_ptrs, boundary_check=(0, 1), padding_option="zero"
-    )
-
-    grad_q = tl.zeros((BLOCK_LQ, BLOCK_Cph), dtype=dtype)
-    scale = tl.full((1,), scale, dtype=dtype)
-
-    for lk_start in tl.static_range(0, L, BLOCK_LK):
-        k_ptrs = tl.make_block_ptr(
-            k_base,
-            shape=(L, Cph),
-            strides=(1, L),
-            offsets=(lk_start, 0),
-            block_shape=(BLOCK_LK, BLOCK_Cph),
-            order=(1, 0)
-        )
-        kt = tl.load(k_ptrs, boundary_check=(0, 1), padding_option="zero")
-        v_ptrs = tl.make_block_ptr(
-            v_base,
-            shape=(Cph, L),
-            strides=(L, 1),
-            offsets=(0, lk_start),
-            block_shape=(BLOCK_Cph, BLOCK_LK),
-            order=(1, 0)
-        )
-        vt = tl.load(v_ptrs, boundary_check=(0, 1), padding_option="zero")
-
-        if BLOCK_Cph <= BLOCK_LQ and BLOCK_Cph <= BLOCK_LK:
-            # grad_q = scale * grad_output * (v^t * k^t)
-            vtkt = tl.dot(
-                vt,
-                kt,
-                input_precision="ieee",
-                out_dtype=dtype,
-            )
-            grad_q = tl.dot(
-                grad_output,
-                vtkt,
-                acc=grad_q,
-                input_precision="ieee",
-                out_dtype=dtype
-            )
-        else:
-            # grad_q = scale * (grad_output * v^t) * k^t
-            grad_output_vt = tl.dot(
-                grad_output,
-                vt,
-                input_precision="ieee",
-                out_dtype=dtype,
-            )
-            grad_q = tl.dot(
-                grad_output_vt,
-                kt,
-                acc=grad_q,
-                input_precision="ieee",
-                out_dtype=dtype
-            )
-
-    grad_q_ptrs = tl.make_block_ptr(
-        grad_q_base,
-        shape=(L, Cph),
-        strides=(1, L),
-        offsets=(lq_start, 0),
-        block_shape=(BLOCK_LQ, BLOCK_Cph),
-        order=(1, 0)
-    )
-    tl.store(grad_q_ptrs, grad_q * scale, boundary_check=(0, 1))
-
-
+@triton.autotune(
+    configs=[
+        triton.Config({
+            "BLOCK_LQ": b,
+            "BLOCK_LK": b
+        }, num_warps=w, num_stages=1)
+        for b in [16, 32, 64]
+        for w in [8, 16, 32]
+    ],
+    key=["TN", "NUM_HEADS", "Cph", "L", "BLOCK_Cph", "dtype"],
+    restore_value=["grad_qkv_ptr"],
+)
 @triton.jit
 def _ssa_backward_kernel_without_atomic(
     grad_output_ptr,  # [TN, NUM_HEADS, Cph, L]
     qkv_ptr,  # [TN, 3, NUM_HEADS, Cph, L]
     grad_qkv_ptr,  # [TN, 3, NUM_HEADS, Cph, L]; w
     scale,
+    TN: tl.constexpr,  # for autotune
     NUM_HEADS: tl.constexpr,
     Cph: tl.constexpr,
     L: tl.constexpr,
@@ -638,7 +563,6 @@ def ssa_forward(qkv, scale):
     Cph = qkv.shape[4]
     L = qkv.shape[5]
 
-    BLOCK_LQ, BLOCK_LK = 32, 32
     BLOCK_Cph = max(triton.next_power_of_2(Cph), 16)
 
     output = torch.empty_like(qkv[:, :, 0])
@@ -647,12 +571,11 @@ def ssa_forward(qkv, scale):
         qkv,
         output,
         scale,
+        TN,
         NUM_HEADS,
         Cph,
         L,
-        BLOCK_LQ,
-        BLOCK_LK,
-        BLOCK_Cph,
+        BLOCK_Cph=BLOCK_Cph,
         dtype=type_dict[qkv.dtype]
     )
 
@@ -667,7 +590,6 @@ def ssa_backward_with_atomic(grad_output, qkv, scale):
     Cph = qkv.shape[4]
     L = qkv.shape[5]
 
-    BLOCK_LQ, BLOCK_LK = 32, 32
     BLOCK_Cph = max(triton.next_power_of_2(Cph), 16)
 
     #! atomic-added buffers must be init to 0, not empty()
@@ -678,12 +600,11 @@ def ssa_backward_with_atomic(grad_output, qkv, scale):
         qkv,
         grad_qkv,
         scale,
+        TN,
         NUM_HEADS,
         Cph,
         L,
-        BLOCK_LQ,
-        BLOCK_LK,
-        BLOCK_Cph,
+        BLOCK_Cph=BLOCK_Cph,
         dtype=type_dict[grad_output.dtype]
     )
 
@@ -698,7 +619,6 @@ def ssa_backward_without_atomic(grad_output, qkv, scale):
     Cph = qkv.shape[4]
     L = qkv.shape[5]
 
-    BLOCK_LQ, BLOCK_LK = 32, 32
     BLOCK_Cph = max(triton.next_power_of_2(Cph), 16)
 
     grad_qkv = torch.empty_like(qkv)
@@ -712,12 +632,11 @@ def ssa_backward_without_atomic(grad_output, qkv, scale):
         qkv,
         grad_qkv,
         scale,
+        TN,
         NUM_HEADS,
         Cph,
         L,
-        BLOCK_LQ,
-        BLOCK_LK,
-        BLOCK_Cph,
+        BLOCK_Cph=BLOCK_Cph,
         dtype=type_dict[grad_output.dtype]
     )
 

@@ -2,6 +2,7 @@ import torch.nn as nn
 
 from ..bn import BatchNorm1dLIF
 from ..neurons import LIF
+from ...ops.ssa import SSAFunction
 
 
 class SpikingSelfAttention(nn.Module):
@@ -32,17 +33,17 @@ class SpikingSelfAttention(nn.Module):
     def forward(self, x_seq):
         T, N, C, L = x_seq.shape
 
-        qkv = self.qkv_conv(x_seq.flatten(0, 1)).reshape(T, N, C * 3, L)
+        qkv = self.qkv_conv(x_seq.flatten(0, 1)).reshape(T, N, 3 * C, L)
         qkv = self.qkv_bn_lif(qkv)
-        qkv = qkv.reshape(T, N, self.num_heads * 3, C // self.num_heads, L)
+        qkv = qkv.reshape(T, N, 3, self.num_heads, C // self.num_heads, L)
 
-        # TODO: wrap this in a Triton kernel
-        q, k, v = qkv.chunk(3, dim=2)  # [T, N, num_heads, C_ph, L]
+        x_seq = SSAFunction.apply(qkv, self.scale)
+        # qt, kt, vt = qkv.chunk(3, dim=2)  # [T, N, num_heads, C_ph, L]
         # q, k, v are not contiguous (they are views of qkv).
         # aten.matmul will implicitly clone them to make them contiguous,
         # which is not efficient
-        x_seq = v @ k.transpose(-2, -1)
-        x_seq = (x_seq@q) * self.scale  # [T, N, num_heads, C_ph, L]
+        # x_seq = vt @ kt.transpose(-2, -1)
+        # x_seq = (x_seq@qt) * self.scale  # [T, N, num_heads, C_ph, L]
 
         x_seq = self.attn_lif(x_seq).reshape(T, N, C, L)
 

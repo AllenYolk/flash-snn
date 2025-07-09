@@ -30,7 +30,7 @@ class LIF(nn.Module):
         else:
             self.kernel = lif.MultistepLIFHardFunction
 
-    def forward(self, x_seq: torch.Tensro):
+    def forward(self, x_seq: torch.Tensor):
         return self.kernel.apply(
             x_seq,
             self.beta,
