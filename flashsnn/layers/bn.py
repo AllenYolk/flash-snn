@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 
 from flashsnn.ops.bn import BatchNormFunction, BatchNormLIFFunction
-from flashsnn.ops import lif, surrogate_kernels
+from flashsnn.ops import lif as lif_ops
+from flashsnn.ops import surrogate_kernels
 
 
 class BatchNorm1d(nn.BatchNorm1d):
@@ -99,9 +100,9 @@ class BatchNorm1dLIF(nn.BatchNorm1d):
         self.sg_fn = sg_fn
 
         if soft_reset:
-            self.lif_bwd = lif.multistep_lif_soft_backward
+            self.lif_bwd = lif_ops.multistep_lif_soft_backward
         else:
-            self.lif_bwd = lif.multistep_lif_hard_backward
+            self.lif_bwd = lif_ops.multistep_lif_hard_backward
 
     def forward(
         self,
@@ -144,9 +145,9 @@ class BatchNorm2dLIF(nn.BatchNorm2d):
         self.sg_fn = sg_fn
 
         if soft_reset:
-            self.lif_bwd = lif.multistep_lif_soft_backward
+            self.lif_bwd = lif_ops.multistep_lif_soft_backward
         else:
-            self.lif_bwd = lif.multistep_lif_hard_backward
+            self.lif_bwd = lif_ops.multistep_lif_hard_backward
 
     def forward(
         self,

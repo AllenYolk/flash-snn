@@ -1,8 +1,7 @@
 import torch.nn as nn
 
-from ..bn import BatchNorm1dLIF
-from ..neurons import LIF
-from ...ops.ssa import SSAFunction
+from flashsnn.layers import BatchNorm1dLIF, LIF
+from flashsnn.ops.ssa import SSAFunction
 
 
 class SpikingSelfAttention(nn.Module):
