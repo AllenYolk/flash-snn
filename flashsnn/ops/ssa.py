@@ -151,7 +151,7 @@ def _ssa_backward_kernel_with_atomic(
 ):
     tn = tl.program_id(0)
     head = tl.program_id(1)
-    lq_start = tl.program_id(2) * BLOCK_LQ
+    lk_start = tl.program_id(2) * BLOCK_LK
 
     # locate the [Cph, L] matrices
     S_head = Cph * L
@@ -166,51 +166,52 @@ def _ssa_backward_kernel_with_atomic(
     grad_output_base = grad_output_ptr + tn*S_qkv + head*S_head
 
     cphs = tl.arange(0, BLOCK_Cph)
-    lks = tl.arange(0, BLOCK_LK)
+    lqs = tl.arange(0, BLOCK_LQ)
 
-    q_ptrs = tl.make_block_ptr(
-        q_base,
-        shape=(Cph, L),
-        strides=(L, 1),
-        offsets=(0, lq_start),
-        block_shape=(BLOCK_Cph, BLOCK_LQ),
-        order=(1, 0)
-    )  # the transpose of the q in the forward kernel
-    qt = tl.load(q_ptrs, boundary_check=(0, 1), padding_option="zero")
-    grad_output_ptrs = tl.make_block_ptr(
-        grad_output_base,
+    k_ptrs = tl.make_block_ptr(
+        k_base,
         shape=(L, Cph),
         strides=(1, L),
-        offsets=(lq_start, 0),
-        block_shape=(BLOCK_LQ, BLOCK_Cph),
+        offsets=(lk_start, 0),
+        block_shape=(BLOCK_LK, BLOCK_Cph),
         order=(1, 0)
     )
-    grad_output = tl.load(
-        grad_output_ptrs, boundary_check=(0, 1), padding_option="zero"
+    kt = tl.load(k_ptrs, boundary_check=(0, 1), padding_option="zero")
+    v_ptrs = tl.make_block_ptr(
+        v_base,
+        shape=(Cph, L),
+        strides=(L, 1),
+        offsets=(0, lk_start),
+        block_shape=(BLOCK_Cph, BLOCK_LK),
+        order=(1, 0)
     )
+    vt = tl.load(v_ptrs, boundary_check=(0, 1), padding_option="zero")
 
-    grad_q = tl.zeros((BLOCK_LQ, BLOCK_Cph), dtype=dtype)
+    grad_k = tl.zeros((BLOCK_Cph, BLOCK_LK), dtype=dtype)
+    grad_v = tl.zeros((BLOCK_LK, BLOCK_Cph), dtype=dtype)
     scale = tl.full((1,), scale, dtype=dtype)
 
-    for lk_start in tl.static_range(0, L, BLOCK_LK):
-        k_ptrs = tl.make_block_ptr(
-            k_base,
-            shape=(L, Cph),
-            strides=(1, L),
-            offsets=(lk_start, 0),
-            block_shape=(BLOCK_LK, BLOCK_Cph),
-            order=(1, 0)
-        )
-        kt = tl.load(k_ptrs, boundary_check=(0, 1), padding_option="zero")
-        v_ptrs = tl.make_block_ptr(
-            v_base,
+    for lq_start in tl.static_range(0, L, BLOCK_LQ):
+        q_ptrs = tl.make_block_ptr(
+            q_base,
             shape=(Cph, L),
             strides=(L, 1),
-            offsets=(0, lk_start),
-            block_shape=(BLOCK_Cph, BLOCK_LK),
+            offsets=(0, lq_start),
+            block_shape=(BLOCK_Cph, BLOCK_LQ),
+            order=(1, 0)
+        )  # the transpose of the q in the forward kernel
+        qt = tl.load(q_ptrs, boundary_check=(0, 1), padding_option="zero")
+        grad_output_ptrs = tl.make_block_ptr(
+            grad_output_base,
+            shape=(L, Cph),
+            strides=(1, L),
+            offsets=(lq_start, 0),
+            block_shape=(BLOCK_LQ, BLOCK_Cph),
             order=(1, 0)
         )
-        vt = tl.load(v_ptrs, boundary_check=(0, 1), padding_option="zero")
+        grad_output = tl.load(
+            grad_output_ptrs, boundary_check=(0, 1), padding_option="zero"
+        )
 
         if BLOCK_Cph <= BLOCK_LQ and BLOCK_Cph <= BLOCK_LK:
             # grad_q = scale * grad_output * (v^t * k^t)
@@ -223,9 +224,8 @@ def _ssa_backward_kernel_with_atomic(
             grad_q = tl.dot(
                 grad_output,
                 vtkt,
-                acc=grad_q,
                 input_precision="ieee",
-                out_dtype=dtype
+                out_dtype=dtype,
             )
             # grad_k = scale * (q^T * grad_output) * v^T
             qt_grad_output = tl.dot(
@@ -237,6 +237,7 @@ def _ssa_backward_kernel_with_atomic(
             grad_k = tl.dot(
                 qt_grad_output,
                 vt,
+                acc=grad_k,
                 input_precision="ieee",
                 out_dtype=dtype,
             )
@@ -244,6 +245,7 @@ def _ssa_backward_kernel_with_atomic(
             grad_v = tl.dot(
                 kt,
                 qt_grad_output,
+                acc=grad_v,
                 input_precision="ieee",
                 out_dtype=dtype,
             )
@@ -258,14 +260,14 @@ def _ssa_backward_kernel_with_atomic(
             grad_q = tl.dot(
                 grad_output_vt,
                 kt,
-                acc=grad_q,
                 input_precision="ieee",
-                out_dtype=dtype
+                out_dtype=dtype,
             )
             # grad_k = scale * q^T * (grad_output * v^T)
             grad_k = tl.dot(
                 qt,
                 grad_output_vt,
+                acc=grad_k,
                 input_precision="ieee",
                 out_dtype=dtype,
             )
@@ -279,31 +281,35 @@ def _ssa_backward_kernel_with_atomic(
             grad_v = tl.dot(
                 ktqt,
                 grad_output,
+                acc=grad_v,
                 input_precision="ieee",
                 out_dtype=dtype,
             )
 
-        krow = cphs[:, None]
-        kcol = lks[None, :] + lk_start
-        grad_k_ptrs = grad_k_base + krow*L + kcol
-        kmask = (krow < Cph) & (kcol < L)
-        tl.atomic_add(grad_k_ptrs, grad_k * scale, mask=kmask)
+        qrow = lqs[:, None] + lq_start
+        qcol = cphs[None, :]
+        grad_q_ptrs = grad_q_base + qrow + qcol*L
+        qmask = (qrow < L) & (qcol < Cph)
+        tl.atomic_add(grad_q_ptrs, grad_q * scale, mask=qmask)
 
-        vrow = lks[:, None] + lk_start
-        vcol = cphs[None, :]
-        grad_v_ptrs = grad_v_base + vrow + vcol*L
-        vmask = (vrow < L) & (vcol < Cph)
-        tl.atomic_add(grad_v_ptrs, grad_v * scale, mask=vmask)
-
-    grad_q_ptrs = tl.make_block_ptr(
-        grad_q_base,
-        shape=(L, Cph),
-        strides=(1, L),
-        offsets=(lq_start, 0),
-        block_shape=(BLOCK_LQ, BLOCK_Cph),
+    grad_k_ptrs = tl.make_block_ptr(
+        grad_k_base,
+        shape=(Cph, L),
+        strides=(L, 1),
+        offsets=(0, lk_start),
+        block_shape=(BLOCK_Cph, BLOCK_LK),
         order=(1, 0)
     )
-    tl.store(grad_q_ptrs, grad_q * scale, boundary_check=(0, 1))
+    tl.store(grad_k_ptrs, grad_k * scale, boundary_check=(0, 1))
+    grad_v_ptrs = tl.make_block_ptr(
+        grad_v_base,
+        shape=(L, Cph),
+        strides=(1, L),
+        offsets=(lk_start, 0),
+        block_shape=(BLOCK_LK, BLOCK_Cph),
+        order=(1, 0)
+    )
+    tl.store(grad_v_ptrs, grad_v * scale, boundary_check=(0, 1))
 
 
 @triton.autotune(
@@ -594,7 +600,7 @@ def ssa_backward_with_atomic(grad_output, qkv, scale):
 
     #! atomic-added buffers must be init to 0, not empty()
     grad_qkv = torch.zeros_like(qkv)
-    grid = lambda meta: (TN, NUM_HEADS, triton.cdiv(L, meta['BLOCK_LQ']))
+    grid = lambda meta: (TN, NUM_HEADS, triton.cdiv(L, meta['BLOCK_LK']))
     _ssa_backward_kernel_with_atomic[grid](
         grad_output,
         qkv,
