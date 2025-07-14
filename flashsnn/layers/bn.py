@@ -7,6 +7,13 @@ from flashsnn.ops.bn import BatchNormFunction, BatchNormLIFFunction
 from flashsnn.ops import lif as lif_ops
 from flashsnn.ops import surrogate_kernels
 
+__all__ = [
+    "BatchNorm1d",
+    "BatchNorm2d",
+    "BatchNorm1dLIF",
+    "BatchNorm2dLIF",
+]
+
 
 class BatchNorm1d(nn.BatchNorm1d):
 

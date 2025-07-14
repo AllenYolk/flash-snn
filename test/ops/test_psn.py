@@ -49,7 +49,7 @@ class VanillaPSN(nn.Module):
 @pytest.mark.parametrize("input_shape", INPUT_SHAPE_LIST)
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
 @pytest.mark.parametrize("inplace", INPLACE_LIST)
-def test_lif_ops(input_shape, dtype, inplace):
+def test_psn_ops(input_shape, dtype, inplace):
     x_seq_1 = torch.randn(input_shape, device="cuda", dtype=dtype)
     x_seq_2 = x_seq_1.clone().detach()
     x_seq_1.requires_grad = True

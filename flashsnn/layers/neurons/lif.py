@@ -6,6 +6,8 @@ import torch.nn as nn
 from flashsnn.ops import surrogate_kernels
 from flashsnn.ops import lif as lif_ops
 
+__all__ = ["LIF"]
+
 
 class LIF(nn.Module):
 

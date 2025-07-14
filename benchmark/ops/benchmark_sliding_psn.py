@@ -6,7 +6,7 @@ import torch
 import triton
 from spikingjelly.activation_based import neuron
 
-from flashsnn.ops import psn
+from flashsnn.ops import psn, surrogate_kernels
 
 DEVICE = "cuda"
 DTYPE = torch.float32
@@ -15,7 +15,14 @@ QUANTILES = [0.5, 0.2, 0.8]
 
 def sliding_psn_forward(x, weight, bias, T):
     weight = psn.GenerateSlidingPSNGemmWeightFunction.apply(weight, T)
-    return psn.PSNFunction.apply(x, weight, bias.expand(T, 1))
+    return psn.PSNFunction.apply(
+        x,
+        weight,
+        bias.expand(T, 1),
+        surrogate_kernels.atan_surrogate_backward,
+        False,
+        False,
+    )
 
 
 @triton.testing.perf_report([

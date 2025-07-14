@@ -7,6 +7,8 @@ import torch.nn as nn
 from flashsnn.ops import surrogate_kernels
 from flashsnn.ops import plif as plif_ops
 
+__all__ = ["PLIF"]
+
 
 class PLIF(nn.Module):
 
