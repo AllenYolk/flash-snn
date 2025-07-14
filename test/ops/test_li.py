@@ -31,27 +31,6 @@ class VanillaLI(nn.Module):
         return y_seq
 
 
-class VanillaPLI(nn.Module):
-
-    def __init__(self, beta_init: float, dtype: torch.dtype):
-        super().__init__()
-        self._beta = nn.Parameter(torch.tensor(beta_init).to(dtype))
-        self.one = torch.tensor(1.).to(dtype)
-        self.dtype = dtype
-
-    @property
-    def beta(self):
-        return torch.sigmoid(self._beta)
-
-    def forward(self, x_seq: torch.Tensor):
-        y = torch.zeros_like(x_seq[0])
-        y_seq = torch.empty_like(x_seq)
-        for t in range(x_seq.shape[0]):
-            y = self.beta * y + x_seq[t]
-            y_seq[t] = y
-        return y_seq
-
-
 @pytest.mark.parametrize("beta", BETA_LIST)
 @pytest.mark.parametrize("input_shape", INPUT_SHAPE_LIST)
 @pytest.mark.parametrize("dtype", DTYPE_LIST)

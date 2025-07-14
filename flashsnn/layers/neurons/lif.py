@@ -45,7 +45,7 @@ class LIF(nn.Module):
 
     def extra_repr(self):
         return (
-            f"beta={self.beta}, "
+            f"beta={self.beta:.3f}, "
             f"soft_reset={self.soft_reset}, "
             f"detach_reset={self.detach_reset}, "
         )

@@ -15,22 +15,6 @@ DTYPE_LIST = [torch.float32, torch.float16]
 INPLACE_LIST = [True, False]
 
 
-class VanillaLI(nn.Module):
-
-    def __init__(self, beta: float, dtype: torch.dtype):
-        super().__init__()
-        self.beta = torch.tensor(beta).to(dtype)
-        self.one = torch.tensor(1.).to(dtype)
-
-    def forward(self, x_seq: torch.Tensor):
-        y = torch.zeros_like(x_seq[0])
-        y_seq = torch.empty_like(x_seq)
-        for t in range(x_seq.shape[0]):
-            y = self.beta * y + x_seq[t]
-            y_seq[t] = y
-        return y_seq
-
-
 class VanillaPLI(nn.Module):
 
     def __init__(self, beta_init: float, dtype: torch.dtype):
