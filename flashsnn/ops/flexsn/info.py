@@ -12,21 +12,23 @@ def extract_info(
     The forward core graph should have the following signature:
     [*inputs, *states] -> [*outputs, *states, *intermediates]
 
-    fwd_core_returns: the return value names of the forward core. There might
-        be duplicated tensors in fwd_core_returns, but fwd_core_returns[2:] are
+    The following information will be extracted:
+
+    * fwd_core_returns: the return value names of the forward core. There might\
+        be duplicated tensors in fwd_core_returns, but fwd_core_returns[2:] are\
         all unique!!!
-    num_fwd_core_returns: the length of fwd_core_returns
-    fwd_core_return_symbols: the names of the variables receiving the return 
+    * num_fwd_core_returns: the length of fwd_core_returns
+    * fwd_core_return_symbols: the names of the variables receiving the return 
         values of the forward core
-    fwd_kernel_returns: the return value names of the forward kernel; no
+    * fwd_kernel_returns: the return value names of the forward kernel; no
         duplicated tensors!!!
-    num_fwd_kernel_returns: the length of fwd_kernel_returns
-    extra_return_mapping: the mapping between the index i of fwd_core_returns[2:] 
-        and the index j of fwd_kernel_returns. It can be used to map the return
+    * num_fwd_kernel_returns: the length of fwd_kernel_returns
+    * extra_return_mapping: the mapping between the index i of fwd_core_returns[2:]\
+        and the index j of fwd_kernel_returns. It can be used to map the return\
         values of the forward kernel to the input of the backward core.
 
     Args:
-        fwd_graph (fx.Graph)
+        fwd_graph (fx.Graph): the forward computational graph.
         num_inputs (int): Defaults to 1.
         num_states (int): Defaults to 1.
         num_outputs (int): Defaults to 1.

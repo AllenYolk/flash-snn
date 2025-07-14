@@ -1,7 +1,8 @@
 import torch.nn as nn
 
-from flashsnn.layers import BatchNorm1dLIF, LIF
-from flashsnn.ops.ssa import SSAFunction
+from ..bn import BatchNorm1d, BatchNorm1dLIF
+from ..neurons.lif import LIF
+from ...ops.ssa import SSAFunction
 
 __all__ = ["SpikingSelfAttention"]
 
