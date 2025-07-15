@@ -61,6 +61,10 @@ def test_flexsn_forward_backward(beta, shape, dtype):
     assert_close(x1.grad, x2.grad, prefix="grad_x")
 
 
+def interpolate(x: torch.Tensor, y: torch.Tensor, alpha: float):
+    return x*alpha + y * (1.-alpha)
+
+
 def strange_lif_core(
     x: torch.Tensor, y: torch.Tensor, v: torch.Tensor, rho: torch.Tensor
 ):
@@ -71,7 +75,7 @@ def strange_lif_core(
     v = h * (1.-s)
     vv = h * (1.-ss)
     sy = torch.sigmoid(y)
-    v = v*sy + vv * (1.-sy)
+    v = interpolate(v, vv, sy)
     return s, ss, v, rho
 
 
@@ -95,7 +99,7 @@ class StrangeLIF(nn.Module):
             v = h * (1.-s)
             vv = h * (1.-ss)
             sy = torch.sigmoid(y_seq[t])
-            v = v*sy + vv * (1.-sy)
+            v = interpolate(v, vv, sy)
             s_seq[t] = s
             ss_seq[t] = ss
         return s_seq, ss_seq
