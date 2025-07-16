@@ -4,6 +4,10 @@ sys.path.append("./")
 
 import torch
 import torch.nn as nn
+import torch._dynamo
+
+torch._dynamo.config.suppress_errors = True
+
 import triton
 from spikingjelly.activation_based import surrogate, functional, neuron
 
