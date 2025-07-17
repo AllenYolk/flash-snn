@@ -42,6 +42,32 @@ FX_TO_TRITON = {
         lambda args, kwargs: f"{_uw(args[1])} - {_uw(args[0])}",
     "mul.Tensor":
         lambda args, kwargs: f"{_uw(args[0])} * {_uw(args[1])}",
+    "bitwise_and.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} & {_uw(args[1])}",
+    "bitwise_or.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} | {_uw(args[1])}",
+    "bitwise_not.default":
+        lambda args, kwargs: f"~{_uw(args[0])}",
+    "eq.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} == {_uw(args[1])}",
+    "eq.Scalar":
+        lambda args, kwargs: f"{_uw(args[0])} == {_uw(args[1])}",
+    "ge.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} >= {_uw(args[1])}",
+    "ge.Scalar":
+        lambda args, kwargs: f"{_uw(args[0])} >= {_uw(args[1])}",
+    "le.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} <= {_uw(args[1])}",
+    "le.Scalar":
+        lambda args, kwargs: f"{_uw(args[0])} <= {_uw(args[1])}",
+    "gt.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} > {_uw(args[1])}",
+    "gt.Scalar":
+        lambda args, kwargs: f"{_uw(args[0])} > {_uw(args[1])}",
+    "lt.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} < {_uw(args[1])}",
+    "lt.Scalar":
+        lambda args, kwargs: f"{_uw(args[0])} < {_uw(args[1])}",
     "reciprocal.default": # may result in change of dtype!!!
         lambda args, kwargs: f"(1. / {_uw(args[0])}).to({_uw(args[0])}.dtype)",
     "neg.default":
@@ -56,6 +82,10 @@ FX_TO_TRITON = {
         lambda args, kwargs: (f"{_uw(args[0])} * {_uw(args[1])} * (1 - {_uw(args[1])})"),
     "_to_copy.default":
         lambda args, kwargs: f"{_uw(args[0])}.to({_uw(kwargs['dtype'])})",
+    "scalar_tensor.default":
+        lambda args, kwargs: f"tl.full([], {_uw(args[0])}, {_uw(kwargs['dtype'])})",
+    "where.self":
+        lambda args, kwargs: f"tl.where({_uw(args[0])}.to(tl.int1), {_uw(args[1])}, {_uw(args[2])})"
 }
 
 INDENTATION = " " * 4  # four spaces

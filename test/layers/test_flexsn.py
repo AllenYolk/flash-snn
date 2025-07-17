@@ -73,7 +73,7 @@ def strange_lif_core(
     ss = spike_fn(h - 1.)
     rho = 0.99*rho + s
     v = h * (1.-s)
-    vv = h * (1.-ss)
+    vv = torch.where(ss.to(bool) & s.to(torch.bool), h * (1.-ss), h - ss)
     sy = torch.sigmoid(y)
     v = interpolate(v, vv, sy)
     return s, ss, v, rho
@@ -97,7 +97,9 @@ class StrangeLIF(nn.Module):
             ss = self.sg(h - 1.)
             rho = 0.99*rho + s
             v = h * (1.-s)
-            vv = h * (1.-ss)
+            vv = torch.where(
+                ss.to(bool) & s.to(torch.bool), h * (1.-ss), h - ss
+            )
             sy = torch.sigmoid(y_seq[t])
             v = interpolate(v, vv, sy)
             s_seq[t] = s

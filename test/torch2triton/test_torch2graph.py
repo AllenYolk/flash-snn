@@ -14,8 +14,8 @@ def lif_core_generator(beta):
     def lif_core(x: torch.Tensor, v: torch.Tensor):
         h = v*beta + x
         s = spike_fn(h - 1.)
-        v = h * (1. - s.detach())
-        return s, v
+        h = torch.where((s > 0.5) | ~(h < s), h - 1, h)
+        return s, h
 
     return lif_core
 

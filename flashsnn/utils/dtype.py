@@ -2,11 +2,13 @@ import torch
 import triton.language as tl
 
 type_dict = {
+    torch.bool: tl.int1,
     torch.float32: tl.float32,
     torch.float16: tl.float16,
 }
 
 type_str_dict = {
+    torch.bool: "tl.int1",
     torch.float32: "tl.float32",
     torch.float16: "tl.float16",
 }
