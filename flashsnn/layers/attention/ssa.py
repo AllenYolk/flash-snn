@@ -1,6 +1,6 @@
 import torch.nn as nn
 
-from ..bn import BatchNorm1d, BatchNorm1dLIF
+from ..bn import BatchNorm1dLIF
 from ..neurons.lif import LIF
 from ...ops.ssa import SSAFunction
 
