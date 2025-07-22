@@ -91,6 +91,7 @@ class BatchNorm1dLIF(nn.BatchNorm1d):
         affine: bool = True,
         track_running_stats: bool = True,
         beta: float = 0.5,
+        vth: float = 1.0,
         soft_reset: bool = False,
         detach_reset: bool = True,
         sg_fn: Callable = surrogate_kernels.atan_surrogate_backward,
@@ -102,6 +103,7 @@ class BatchNorm1dLIF(nn.BatchNorm1d):
             dtype
         )
         self.beta = beta
+        self.vth = vth
         self.soft_reset = soft_reset
         self.detach_reset = detach_reset
         self.sg_fn = sg_fn
@@ -121,7 +123,7 @@ class BatchNorm1dLIF(nn.BatchNorm1d):
         return BatchNormLIFFunction.apply(
             x_seq, r_seq, self.training, self.weight, self.bias,
             self.running_mean, self.running_var, self.momentum, self.eps,
-            self.track_running_stats, self.beta, self.soft_reset,
+            self.track_running_stats, self.beta, self.vth, self.soft_reset,
             self.detach_reset, self.lif_bwd, self.sg_fn
         )
 
@@ -136,6 +138,7 @@ class BatchNorm2dLIF(nn.BatchNorm2d):
         affine: bool = True,
         track_running_stats: bool = True,
         beta: float = 0.5,
+        vth: float = 1.0,
         soft_reset: bool = False,
         detach_reset: bool = True,
         sg_fn: Callable = surrogate_kernels.atan_surrogate_backward,
@@ -147,6 +150,7 @@ class BatchNorm2dLIF(nn.BatchNorm2d):
             dtype
         )
         self.beta = beta
+        self.vth = vth
         self.soft_reset = soft_reset
         self.detach_reset = detach_reset
         self.sg_fn = sg_fn
@@ -166,6 +170,6 @@ class BatchNorm2dLIF(nn.BatchNorm2d):
         return BatchNormLIFFunction.apply(
             x_seq, r_seq, self.training, self.weight, self.bias,
             self.running_mean, self.running_var, self.momentum, self.eps,
-            self.track_running_stats, self.beta, self.soft_reset,
+            self.track_running_stats, self.beta, self.vth, self.soft_reset,
             self.detach_reset, self.lif_bwd, self.sg_fn
         )

@@ -24,6 +24,7 @@ def _multistep_lif_forward_kernel(
     s_seq_ptr,
     h_seq_ptr,
     beta,
+    vth,
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
@@ -49,7 +50,7 @@ def _multistep_lif_forward_kernel(
         x = tl.load(x_ptrs, boundary_check=(1,), padding_option="zero")
 
         h = tl.fma(beta, v, x)
-        s = (h >= 1.).to(dtype)  # v_th = 1
+        s = (h >= vth).to(dtype)
         if soft_reset:
             v = h - s
         else:
@@ -97,6 +98,7 @@ def _multistep_lif_hard_backward_kernel(
     s_seq_ptr,
     grad_x_seq_ptr,
     beta,
+    vth,
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
@@ -141,7 +143,7 @@ def _multistep_lif_hard_backward_kernel(
         )
         s = tl.load(s_ptrs, boundary_check=(1,), padding_option="zero")
 
-        sg = sg_fn(h - 1.)
+        sg = sg_fn(h - vth)
         if detach_reset:
             # grad_v = grad_s*sg + grad_v * (one-s)
             grad_v = tl.fma(grad_s, sg, grad_v * (1.-s))
@@ -176,6 +178,7 @@ def _multistep_lif_soft_backward_kernel(
     h_seq_ptr,
     grad_x_seq_ptr,
     beta,
+    vth,
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
@@ -211,7 +214,7 @@ def _multistep_lif_soft_backward_kernel(
         )
         h = tl.load(h_ptrs, boundary_check=(1,), padding_option="zero")
 
-        sg = sg_fn(h - 1.)
+        sg = sg_fn(h - vth)
         if detach_reset:
             grad_v = tl.fma(grad_s, sg, grad_v)
         else:
@@ -230,7 +233,11 @@ def _multistep_lif_soft_backward_kernel(
 
 
 def multistep_lif_inference(
-    x_seq: torch.Tensor, beta: float, soft_reset: bool, inplace: bool = False
+    x_seq: torch.Tensor,
+    beta: float,
+    vth: float,
+    soft_reset: bool,
+    inplace: bool = False,
 ):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
@@ -243,6 +250,7 @@ def multistep_lif_inference(
         s_seq,
         None,
         beta,
+        vth,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
@@ -253,7 +261,11 @@ def multistep_lif_inference(
 
 
 def multistep_lif_forward(
-    x_seq: torch.Tensor, beta: float, soft_reset: bool, inplace: bool = False
+    x_seq: torch.Tensor,
+    beta: float,
+    vth: float,
+    soft_reset: bool,
+    inplace: bool = False,
 ):
     T = x_seq.shape[0]
     NCL = x_seq[0].numel()
@@ -267,6 +279,7 @@ def multistep_lif_forward(
         s_seq,
         h_seq,
         beta,
+        vth,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
@@ -281,6 +294,7 @@ def multistep_lif_hard_backward(
     h_seq: torch.Tensor,
     s_seq: torch.Tensor,
     beta: float,
+    vth: float,
     sg_fn: Callable,
     detach_reset: bool,
     inplace: bool = False
@@ -297,6 +311,7 @@ def multistep_lif_hard_backward(
         s_seq,
         grad_x_seq,
         beta,
+        vth,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
@@ -310,6 +325,7 @@ def multistep_lif_soft_backward(
     grad_s_seq: torch.Tensor,
     h_seq: torch.Tensor,
     beta: float,
+    vth: float,
     sn_fn: Callable,
     detach_reset: bool,
     inplace: bool = False
@@ -325,6 +341,7 @@ def multistep_lif_soft_backward(
         h_seq,
         grad_x_seq,
         beta,
+        vth,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
@@ -340,20 +357,23 @@ class MultistepLIFHardFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(
-        ctx, x_seq: torch.Tensor, beta: float, sg_fn: Callable,
+        ctx, x_seq: torch.Tensor, beta: float, vth: float, sg_fn: Callable,
         detach_reset: bool, fwd_inplace: bool, bwd_inplace: bool
     ):
         if any(ctx.needs_input_grad):
             s_seq, h_seq = multistep_lif_forward(
-                x_seq, beta, False, fwd_inplace
+                x_seq, beta, vth, False, fwd_inplace
             )
             ctx.save_for_backward(h_seq, s_seq)
             ctx.beta = beta
+            ctx.vth = vth
             ctx.sg_fn = sg_fn
             ctx.detach_reset = detach_reset
             ctx.bwd_inplace = bwd_inplace
         else:
-            s_seq = multistep_lif_inference(x_seq, beta, False, fwd_inplace)
+            s_seq = multistep_lif_inference(
+                x_seq, beta, vth, False, fwd_inplace
+            )
         return s_seq
 
     @staticmethod
@@ -362,10 +382,10 @@ class MultistepLIFHardFunction(autograd.Function):
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq, s_seq = ctx.saved_tensors
         grad_x_seq = multistep_lif_hard_backward(
-            grad_s_seq, h_seq, s_seq, ctx.beta, ctx.sg_fn, ctx.detach_reset,
-            ctx.bwd_inplace
+            grad_s_seq, h_seq, s_seq, ctx.beta, ctx.vth, ctx.sg_fn,
+            ctx.detach_reset, ctx.bwd_inplace
         )
-        return grad_x_seq, None, None, None, None, None
+        return grad_x_seq, None, None, None, None, None, None
 
 
 class MultistepLIFSoftFunction(autograd.Function):
@@ -374,18 +394,21 @@ class MultistepLIFSoftFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(
-        ctx, x_seq: torch.Tensor, beta: float, sg_fn: Callable,
+        ctx, x_seq: torch.Tensor, beta: float, vth: float, sg_fn: Callable,
         detach_reset: bool, fwd_inplace: bool, bwd_inplace: bool
     ):
         if any(ctx.needs_input_grad):
-            s_seq, h_seq = multistep_lif_forward(x_seq, beta, True, fwd_inplace)
+            s_seq, h_seq = multistep_lif_forward(
+                x_seq, beta, vth, True, fwd_inplace
+            )
             ctx.save_for_backward(h_seq)
             ctx.beta = beta
+            ctx.vth = vth
             ctx.sg_fn = sg_fn
             ctx.detach_reset = detach_reset
             ctx.bwd_inplace = bwd_inplace
         else:
-            s_seq = multistep_lif_inference(x_seq, beta, True, fwd_inplace)
+            s_seq = multistep_lif_inference(x_seq, beta, vth, True, fwd_inplace)
         return s_seq
 
     @staticmethod
@@ -394,7 +417,7 @@ class MultistepLIFSoftFunction(autograd.Function):
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq = ctx.saved_tensors[0]
         grad_x_seq = multistep_lif_soft_backward(
-            grad_s_seq, h_seq, ctx.beta, ctx.sg_fn, ctx.detach_reset,
+            grad_s_seq, h_seq, ctx.beta, ctx.vth, ctx.sg_fn, ctx.detach_reset,
             ctx.bwd_inplace
         )
-        return grad_x_seq, None, None, None, None, None
+        return grad_x_seq, None, None, None, None, None, None

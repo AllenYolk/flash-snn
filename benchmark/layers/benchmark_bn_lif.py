@@ -74,8 +74,8 @@ def get_triton_bn_lif_forward(C):
         x_seq = x_seq.flatten(0, 1)
         y_seq = f1(x_seq).reshape(out_shape)
         return f2(
-            y_seq, 0.5, surrogate_kernels.atan_surrogate_backward, True, False,
-            False
+            y_seq, 0.5, 1., surrogate_kernels.atan_surrogate_backward, True,
+            False, False
         )
 
     return f

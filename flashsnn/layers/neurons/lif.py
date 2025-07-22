@@ -14,6 +14,7 @@ class LIF(nn.Module):
     def __init__(
         self,
         beta: float = 0.5,
+        vth: float = 1.0,
         soft_reset: bool = False,
         detach_reset: bool = True,
         sg_fn: Callable = surrogate_kernels.atan_surrogate_backward,
@@ -22,6 +23,7 @@ class LIF(nn.Module):
     ):
         super().__init__()
         self.beta = beta
+        self.vth = vth
         self.soft_reset = soft_reset
         self.detach_reset = detach_reset
         self.sg_fn = sg_fn
@@ -37,6 +39,7 @@ class LIF(nn.Module):
         return self.kernel.apply(
             x_seq,
             self.beta,
+            self.vth,
             self.sg_fn,
             self.detach_reset,
             self.fwd_inplace,
@@ -46,6 +49,7 @@ class LIF(nn.Module):
     def extra_repr(self):
         return (
             f"beta={self.beta:.3f}, "
+            f"vth={self.vth:.3f}, "
             f"soft_reset={self.soft_reset}, "
             f"detach_reset={self.detach_reset}, "
         )

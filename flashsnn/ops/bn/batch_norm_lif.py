@@ -50,6 +50,7 @@ def batch_norm_lif_forward_kernel(
     momentum,
     eps,
     beta,
+    vth,
     T: tl.constexpr,
     N: tl.constexpr,
     C: tl.constexpr,
@@ -181,7 +182,7 @@ def batch_norm_lif_forward_kernel(
 
                 # LIF forward
                 h = tl.fma(beta, v, y)
-                s = (h >= 1.).to(tl.float32)
+                s = (h >= vth).to(tl.float32)
                 if soft_reset:
                     v = h - s
                 else:
@@ -233,6 +234,7 @@ class BatchNormLIFFunction(autograd.Function):
         eps: float = 1e-5,
         track_running_stats: bool = True,
         beta: float = 0.5,
+        vth: float = 1.0,
         soft_reset: bool = False,
         detach_reset: bool = True,
         lif_bwd: Callable = lif.multistep_lif_hard_backward,
@@ -278,6 +280,7 @@ class BatchNormLIFFunction(autograd.Function):
             momentum,
             eps,
             beta,
+            vth,
             T,
             N,
             C,
@@ -298,6 +301,7 @@ class BatchNormLIFFunction(autograd.Function):
         ctx.affine = affine
         ctx.residual = residual
         ctx.beta = beta
+        ctx.vth = vth
         ctx.soft_reset = soft_reset
         ctx.lif_bwd = lif_bwd
         ctx.sg_fn = sg_fn
@@ -315,7 +319,8 @@ class BatchNormLIFFunction(autograd.Function):
         x_seq_4d = x_seq.unsqueeze(-1).reshape(*x_seq.shape[:3], -1)
 
         grad_output = ctx.lif_bwd(
-            grad_s_seq, *ex, ctx.beta, ctx.sg_fn, ctx.detach_reset, False
+            grad_s_seq, *ex, ctx.beta, ctx.vth, ctx.sg_fn, ctx.detach_reset,
+            False
         )
         grad_output = grad_output.view_as(x_seq_4d)
 
@@ -355,5 +360,5 @@ class BatchNormLIFFunction(autograd.Function):
             grad_input.view_as(x_seq),
             grad_output.view_as(x_seq) if ctx.residual else None, None,
             grad_weight, grad_bias, None, None, None, None, None, None, None,
-            None, None, None
+            None, None, None, None
         )

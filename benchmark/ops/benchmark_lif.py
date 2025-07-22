@@ -161,8 +161,8 @@ def bacnmark(T, NCL, neuron_type):
         f = get_lif_autograd_function()
         results = triton.testing.do_bench(
             lambda: f(
-                x, 0.5, surrogate_kernels.atan_surrogate_backward, True, False,
-                False
+                x, 0.5, 1., surrogate_kernels.atan_surrogate_backward, True,
+                False, False
             ).backward(grad_y),
             quantiles=QUANTILES
         )

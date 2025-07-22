@@ -75,8 +75,8 @@ def test_lif_ops(beta, detach_reset, soft_reset, input_shape, dtype, inplace):
 
     f1 = get_lif_autograd_function(soft_reset)
     y1 = f1(
-        x_seq_1, beta, surrogate_kernels.atan_surrogate_backward, detach_reset,
-        inplace, inplace
+        x_seq_1, beta, 1., surrogate_kernels.atan_surrogate_backward,
+        detach_reset, inplace, inplace
     )
     y1.backward(grad_y_1)
 

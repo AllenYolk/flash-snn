@@ -53,7 +53,8 @@ def test_flexsn_forward_backward(beta, shape, dtype):
 
     # handwritten LIF kernel
     ss = lif.MultistepLIFHardFunction.apply(
-        x2, beta, surrogate_kernels.atan_surrogate_backward, True, False, False
+        x2, beta, 1., surrogate_kernels.atan_surrogate_backward, True, False,
+        False
     )
     ss.backward(gs)
 
