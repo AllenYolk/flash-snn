@@ -16,16 +16,7 @@ QUANTILES = [0.5, 0.2, 0.8]
 
 class OriginalQKAttention(nn.Module):
 
-    def __init__(
-        self,
-        dim,
-        num_heads=8,
-        qkv_bias=False,
-        qk_scale=None,
-        attn_drop=0.,
-        proj_drop=0.,
-        sr_ratio=1
-    ):
+    def __init__(self, dim, num_heads=8):
         super().__init__()
         assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
 
@@ -100,9 +91,9 @@ class OriginalQKAttention(nn.Module):
         # argument name whose value corresponds to a different line in the plot
         line_arg='implementation',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=['torch', 'triton', 'triton-flash'],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=['Torch', 'Triton', 'Triton (flash)'],
         # line styles
         styles=[
             ('green', ':'),
@@ -128,9 +119,9 @@ class OriginalQKAttention(nn.Module):
         # argument name whose value corresponds to a different line in the plot
         line_arg='implementation',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=['torch', 'triton', 'triton-flash'],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=['Torch', 'Triton', 'Triton (flash)'],
         # line styles
         styles=[
             ('green', ':'),
@@ -156,9 +147,9 @@ class OriginalQKAttention(nn.Module):
         # argument name whose value corresponds to a different line in the plot
         line_arg='implementation',
         # possible values for `line_arg``
-        line_vals=['torch', 'triton'],
+        line_vals=['torch', 'triton', 'triton-flash'],
         # label name for the lines
-        line_names=['Torch', 'Triton'],
+        line_names=['Torch', 'Triton', 'Triton (flash)'],
         # line styles
         styles=[
             ('green', ':'),
@@ -193,6 +184,14 @@ def bacnmark(T, N, C, L, implementation):
         grad_y = torch.randn_like(x)
         x.requires_grad = True
         f = qka.TokenQKAttention(dim=C, flash=False).to(DEVICE)
+        results = triton.testing.do_bench(
+            lambda: f(x).backward(grad_y), quantiles=QUANTILES
+        )
+    elif implementation == "triton-flash":
+        x = torch.randn([T, N, C, L * L], device=DEVICE, dtype=DTYPE)
+        grad_y = torch.randn_like(x)
+        x.requires_grad = True
+        f = qka.TokenQKAttention(dim=C, flash=True).to(DEVICE)
         results = triton.testing.do_bench(
             lambda: f(x).backward(grad_y), quantiles=QUANTILES
         )

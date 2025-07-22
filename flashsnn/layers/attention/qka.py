@@ -3,6 +3,8 @@ import torch.nn as nn
 
 from ..bn import BatchNorm1dLIF
 from ..neurons.lif import LIF
+from ...ops.qka import TokenQKAFunction, ChannelQKAFunction
+from ...ops import surrogate_kernels
 
 __all__ = ["QKAttention", "TokenQKAttention", "ChannelQKAttention"]
 
@@ -33,29 +35,29 @@ class QKAttention(nn.Module):
         self.qk_bn_lif = BatchNorm1dLIF(dim * 2, beta=0.5, detach_reset=True)
 
         if flash:
-            raise NotImplementedError(
-                "TokenQKAttention's Triton kernel has not been implemented yet."
-            )
+            if qka_type == "token":
+                self.attn_kernel = TokenQKAFunction.apply
+            else:
+                self.attn_kernel = ChannelQKAFunction.apply
         else:
             self.attn_kernel = self._qka_forward_torch
             self.sum_dim = 3 if qka_type == "token" else 4
-        self.scale = 2.  # multiply the input to attn_lif by 2 to simulate vth=0.5
-        self.attn_lif = LIF(beta=0.5, detach_reset=True)  # vth=1
+            self.attn_lif = LIF(beta=0.5, detach_reset=True)  # vth=1
+            self.scale = 2.  # multiply the input to attn_lif by 2 to simulate vth=0.5
 
         self.proj_conv = nn.Conv1d(
             dim, dim, kernel_size=1, stride=1, bias=False
         )
         self.proj_bn_lif = BatchNorm1dLIF(dim, beta=0.5, detach_reset=True)
 
-    @staticmethod
-    def _qka_forward_torch(qk, scale, attn_lif, sum_dim):
+    def _qka_forward_torch(self, qk, *args, **kwargs):
         # qk.shape = [T, N, 2, NUM_HEADS, Cph, L]
         # q, k = [T, N, NUM_HEADS, Cph, L]
         q, k = qk.flatten(2, 3).chunk(2, dim=2)
-        q = torch.sum(q, dim=sum_dim, keepdim=True)
+        q = torch.sum(q, dim=self.sum_dim, keepdim=True)
         # [T, N, NUM_HEADS, 1, L] if qka_type == "token"
         # [T, N, NUM_HEADS, Cph, 1] if qka_type == "channel"
-        attn = attn_lif(scale * q)
+        attn = self.attn_lif(self.scale * q)
         x_seq = attn * k
         return x_seq  # [T, N, NUM_HEADS, Cph, L]
 
@@ -66,7 +68,7 @@ class QKAttention(nn.Module):
         qk = self.qk_bn_lif(qk)
         qk = qk.reshape(T, N, 2, self.num_heads, C // self.num_heads, L)
 
-        x_seq = self.attn_kernel(qk, self.scale, self.attn_lif, self.sum_dim)
+        x_seq = self.attn_kernel(qk, surrogate_kernels.atan_surrogate_backward)
         x_seq = x_seq.flatten(2, 3)  # [T, N, C, L]
 
         x_seq = self.proj_conv(x_seq.flatten(0, 1)).reshape(T, N, C, L)

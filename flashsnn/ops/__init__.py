@@ -5,3 +5,5 @@ from .li import *
 from .pli import *
 from .spike_function import *
 from .surrogate_kernels import *
+from .ssa import *
+from .qka import *
