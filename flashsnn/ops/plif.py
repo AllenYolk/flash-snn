@@ -37,6 +37,7 @@ def _multistep_plif_forward_kernel(
     s_seq_ptr,
     h_seq_ptr,
     v_seq_ptr,
+    vth,
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
@@ -71,7 +72,7 @@ def _multistep_plif_forward_kernel(
         beta = _sigmoid_forward(beta, dtype)
 
         h = tl.fma(beta, v, x)
-        s = (h >= 1.).to(dtype)  # v_th = 1
+        s = (h >= vth).to(dtype)
         if soft_reset:
             v = h - s
         else:
@@ -130,6 +131,7 @@ def _multistep_plif_hard_backward_kernel(
     s_seq_ptr,
     grad_x_seq_ptr,
     grad_beta_seq_ptr,
+    vth,
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
@@ -194,7 +196,7 @@ def _multistep_plif_hard_backward_kernel(
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
         beta = _sigmoid_forward(beta, dtype)
 
-        sg = sg_fn(h - 1.)
+        sg = sg_fn(h - vth)
         if detach_reset:
             # grad_v = grad_s*sg + grad_v * (one-s)
             grad_v = tl.fma(grad_s, sg, grad_v * (1.-s))
@@ -243,6 +245,7 @@ def _multistep_plif_soft_backward_kernel(
     v_seq_ptr,
     grad_x_seq_ptr,
     grad_beta_seq_ptr,
+    vth,
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
@@ -298,7 +301,7 @@ def _multistep_plif_soft_backward_kernel(
         beta = tl.load(beta_ptrs, boundary_check=(1,), padding_option="zero")
         beta = _sigmoid_forward(beta, dtype)
 
-        sg = sg_fn(h - 1.)
+        sg = sg_fn(h - vth)
         if detach_reset:
             grad_v = tl.fma(grad_s, sg, grad_v)
         else:
@@ -331,6 +334,7 @@ def _multistep_plif_soft_backward_kernel(
 def multistep_plif_inference(
     x_seq: torch.Tensor,
     beta: torch.Tensor,
+    vth: float,
     soft_reset: bool,
     inplace: bool = False
 ):
@@ -346,6 +350,7 @@ def multistep_plif_inference(
         s_seq,
         None,
         None,
+        vth,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
@@ -358,6 +363,7 @@ def multistep_plif_inference(
 def multistep_plif_forward(
     x_seq: torch.Tensor,
     beta: torch.Tensor,
+    vth: float,
     soft_reset: bool,
     inplace: bool = False
 ):
@@ -375,6 +381,7 @@ def multistep_plif_forward(
         s_seq,
         h_seq,
         v_seq,
+        vth,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
@@ -390,6 +397,7 @@ def multistep_plif_hard_backward(
     h_seq: torch.Tensor,
     v_seq: torch.Tensor,
     s_seq: torch.Tensor,
+    vth: float,
     sg_fn: Callable,
     detach_reset: bool,
     inplace: bool = False
@@ -409,6 +417,7 @@ def multistep_plif_hard_backward(
         s_seq,
         grad_x_seq,
         grad_beta,
+        vth,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
@@ -423,6 +432,7 @@ def multistep_plif_soft_backward(
     beta: torch.Tensor,
     h_seq: torch.Tensor,
     v_seq: torch.Tensor,
+    vth: float,
     sg_fn: Callable,
     detach_reset: bool,
     inplace: bool = False
@@ -441,6 +451,7 @@ def multistep_plif_soft_backward(
         v_seq,
         grad_x_seq,
         grad_beta,
+        vth,
         T=T,
         NCL=NCL,
         dtype=type_dict[dtype],
@@ -456,20 +467,24 @@ class MultistepPLIFHardFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(
-        ctx, x_seq: torch.Tensor, beta: torch.Tensor, sg_fn: Callable,
-        detach_reset: bool, fwd_inplace: bool, bwd_inplace: bool
+        ctx, x_seq: torch.Tensor, beta: torch.Tensor, vth: float,
+        sg_fn: Callable, detach_reset: bool, fwd_inplace: bool,
+        bwd_inplace: bool
     ):
         # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
             s_seq, h_seq, v_seq = multistep_plif_forward(
-                x_seq, beta, False, fwd_inplace
+                x_seq, beta, vth, False, fwd_inplace
             )
             ctx.save_for_backward(h_seq, v_seq, s_seq, beta)
+            ctx.vth = vth
             ctx.sg_fn = sg_fn
             ctx.detach_reset = detach_reset
             ctx.bwd_inplace = bwd_inplace
         else:
-            s_seq = multistep_plif_inference(x_seq, beta, False, fwd_inplace)
+            s_seq = multistep_plif_inference(
+                x_seq, beta, vth, False, fwd_inplace
+            )
         return s_seq
 
     @staticmethod
@@ -478,10 +493,10 @@ class MultistepPLIFHardFunction(autograd.Function):
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq, v_seq, s_seq, beta = ctx.saved_tensors
         grad_x_seq, grad_beta = multistep_plif_hard_backward(
-            grad_s_seq, beta, h_seq, v_seq, s_seq, ctx.sg_fn, ctx.detach_reset,
-            ctx.bwd_inplace
+            grad_s_seq, beta, h_seq, v_seq, s_seq, ctx.vth, ctx.sg_fn,
+            ctx.detach_reset, ctx.bwd_inplace
         )
-        return grad_x_seq, grad_beta, None, None, None, None
+        return grad_x_seq, grad_beta, None, None, None, None, None
 
 
 class MultistepPLIFSoftFunction(autograd.Function):
@@ -490,20 +505,24 @@ class MultistepPLIFSoftFunction(autograd.Function):
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(
-        ctx, x_seq: torch.Tensor, beta: torch.Tensor, sg_fn: Callable,
-        detach_reset: bool, fwd_inplace: bool, bwd_inplace: bool
+        ctx, x_seq: torch.Tensor, beta: torch.Tensor, vth: float,
+        sg_fn: Callable, detach_reset: bool, fwd_inplace: bool,
+        bwd_inplace: bool
     ):
         # beta: after applying sigmoid
         if any(ctx.needs_input_grad):
             s_seq, h_seq, v_seq = multistep_plif_forward(
-                x_seq, beta, True, fwd_inplace
+                x_seq, beta, vth, True, fwd_inplace
             )
             ctx.save_for_backward(h_seq, v_seq, beta)
+            ctx.vth = vth
             ctx.sg_fn = sg_fn
             ctx.detach_reset = detach_reset
             ctx.bwd_inplace = bwd_inplace
         else:
-            s_seq = multistep_plif_inference(x_seq, beta, True, fwd_inplace)
+            s_seq = multistep_plif_inference(
+                x_seq, beta, vth, True, fwd_inplace
+            )
         return s_seq
 
     @staticmethod
@@ -512,7 +531,7 @@ class MultistepPLIFSoftFunction(autograd.Function):
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq, v_seq, beta = ctx.saved_tensors
         grad_x_seq, grad_beta = multistep_plif_soft_backward(
-            grad_s_seq, beta, h_seq, v_seq, ctx.sg_fn, ctx.detach_reset,
-            ctx.bwd_inplace
+            grad_s_seq, beta, h_seq, v_seq, ctx.vth, ctx.sg_fn,
+            ctx.detach_reset, ctx.bwd_inplace
         )
-        return grad_x_seq, grad_beta, None, None, None, None
+        return grad_x_seq, grad_beta, None, None, None, None, None

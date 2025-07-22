@@ -15,6 +15,7 @@ class PLIF(nn.Module):
     def __init__(
         self,
         beta_init: float = 0.5,
+        vth: float = 1.0,
         soft_reset: bool = False,
         detach_reset: bool = True,
         sg_fn: Callable = surrogate_kernels.atan_surrogate_backward,
@@ -24,6 +25,7 @@ class PLIF(nn.Module):
         super().__init__()
         _beta_init = self.sigmoid_reverse(beta_init)
         self._beta = nn.Parameter(torch.tensor(_beta_init), requires_grad=True)
+        self.vth = vth
         self.soft_reset = soft_reset
         self.detach_reset = detach_reset
         self.sg_fn = sg_fn
@@ -47,6 +49,7 @@ class PLIF(nn.Module):
         return self.kernel.apply(
             x_seq,
             self._beta.expand(x_seq.shape),  # apply sigmoid inside the kernel
+            self.vth,
             self.sg_fn,
             self.detach_reset,
             self.fwd_inplace,
@@ -56,6 +59,7 @@ class PLIF(nn.Module):
     def extra_repr(self):
         return (
             f"beta={self.beta:.3f}, "
+            f"vth={self.vth:.3f}, "
             f"soft_reset={self.soft_reset}, "
             f"detach_reset={self.detach_reset}, "
         )

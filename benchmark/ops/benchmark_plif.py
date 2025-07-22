@@ -157,7 +157,7 @@ def bacnmark(T, NCL, neuron_type):
         beta = torch.tensor(0.5, device=DEVICE, dtype=DTYPE, requires_grad=True)
         results = triton.testing.do_bench(
             lambda: f(
-                x, beta.expand(x.shape), surrogate_kernels.
+                x, beta.expand(x.shape), 1., surrogate_kernels.
                 atan_surrogate_backward, True, False, False
             ).backward(grad_y),
             quantiles=QUANTILES

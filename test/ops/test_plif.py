@@ -88,7 +88,7 @@ def test_lif_ops(
         beta_init, device="cuda", dtype=dtype, requires_grad=True
     )
     y1 = f1(
-        x_seq_1, beta1.expand(x_seq_1.shape),
+        x_seq_1, beta1.expand(x_seq_1.shape), 1.,
         surrogate_kernels.atan_surrogate_backward, detach_reset, inplace,
         inplace
     )
