@@ -11,6 +11,15 @@ from flashsnn.utils import amp_custom_fwd, amp_custom_bwd
 from flashsnn.utils import get_device_capability
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_L": b}, num_warps=w)
+        for b in [16, 32, 64]
+        for w in [4, 8, 16]
+    ],
+    key=["T", "N", "NUM_HEADS", "Cph", "L", "BLOCK_Cph"],
+    restore_value=["output_ptr", "attn_lif_h_ptr"],
+)
 @triton.jit
 def _token_qka_forward_kernel(
     qk_ptr,  # [T, N, 2, NUM_HEADS, Cph, L]
@@ -105,6 +114,15 @@ def _token_qka_forward_kernel(
             attn_lif_h_base += h_t_stride
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_L": b}, num_warps=w)
+        for b in [16, 32, 64]
+        for w in [4, 8, 16]
+    ],
+    key=["T", "N", "NUM_HEADS", "Cph", "L", "BLOCK_Cph"],
+    restore_value=["grad_qk_ptr"],
+)
 @triton.jit
 def _token_qka_backward_kernel(
     grad_output_ptr,  # [T, N, NUM_HEADS, Cph, L]
@@ -222,10 +240,9 @@ def token_qka_inference(qk):
     # qk.shape = [T, N, 2, NUM_HEADS, Cph, L]
     T, N, _, NUM_HEADS, Cph, L = qk.shape
     BLOCK_Cph = max(triton.next_power_of_2(Cph), 16)
-    BLOCK_L = max(2048 // BLOCK_Cph, 16)
 
     output = torch.empty_like(qk[:, :, 0])
-    grid = (N, NUM_HEADS, triton.cdiv(L, BLOCK_L))
+    grid = lambda meta: (N, NUM_HEADS, triton.cdiv(L, meta["BLOCK_L"]))
     _token_qka_forward_kernel[grid](
         qk,
         output,
@@ -235,8 +252,7 @@ def token_qka_inference(qk):
         NUM_HEADS,
         Cph,
         L,
-        BLOCK_Cph,
-        BLOCK_L,
+        BLOCK_Cph=BLOCK_Cph,
         dtype=type_dict[qk.dtype],
         save_intermediates=False,
     )
@@ -247,11 +263,10 @@ def token_qka_forward(qk):
     # qk.shape = [T, N, 2, NUM_HEADS, Cph, L]
     T, N, _, NUM_HEADS, Cph, L = qk.shape
     BLOCK_Cph = max(triton.next_power_of_2(Cph), 16)
-    BLOCK_L = max(2048 // BLOCK_Cph, 16)
 
     output = torch.empty_like(qk[:, :, 0])
     attn_lif_h = torch.empty_like(output[..., 0:1, :])
-    grid = (N, NUM_HEADS, triton.cdiv(L, BLOCK_L))
+    grid = lambda meta: (N, NUM_HEADS, triton.cdiv(L, meta["BLOCK_L"]))
     _token_qka_forward_kernel[grid](
         qk,
         output,
@@ -261,8 +276,7 @@ def token_qka_forward(qk):
         NUM_HEADS,
         Cph,
         L,
-        BLOCK_Cph,
-        BLOCK_L,
+        BLOCK_Cph=BLOCK_Cph,
         dtype=type_dict[qk.dtype],
         save_intermediates=True,
     )
@@ -273,10 +287,9 @@ def token_qka_backward(grad_output, attn_lif_h, qk, sg_fn):
     # grad_output.shape = [T, N, NUM_HEADS, Cph, L]
     T, N, NUM_HEADS, Cph, L = grad_output.shape
     BLOCK_Cph = max(triton.next_power_of_2(Cph), 16)
-    BLOCK_L = max(2048 // BLOCK_Cph, 16)
 
     grad_qk = torch.empty_like(qk)
-    grid = (N, NUM_HEADS, triton.cdiv(L, BLOCK_L))
+    grid = lambda meta: (N, NUM_HEADS, triton.cdiv(L, meta["BLOCK_L"]))
     _token_qka_backward_kernel[grid](
         grad_output,
         attn_lif_h,
@@ -287,8 +300,7 @@ def token_qka_backward(grad_output, attn_lif_h, qk, sg_fn):
         NUM_HEADS,
         Cph,
         L,
-        BLOCK_Cph,
-        BLOCK_L,
+        BLOCK_Cph=BLOCK_Cph,
         dtype=type_dict[qk.dtype],
         sg_fn=sg_fn,
     )

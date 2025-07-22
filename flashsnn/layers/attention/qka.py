@@ -42,8 +42,7 @@ class QKAttention(nn.Module):
         else:
             self.attn_kernel = self._qka_forward_torch
             self.sum_dim = 3 if qka_type == "token" else 4
-            self.attn_lif = LIF(beta=0.5, detach_reset=True)  # vth=1
-            self.scale = 2.  # multiply the input to attn_lif by 2 to simulate vth=0.5
+            self.attn_lif = LIF(beta=0.5, vth=0.5, detach_reset=True)
 
         self.proj_conv = nn.Conv1d(
             dim, dim, kernel_size=1, stride=1, bias=False
@@ -57,7 +56,7 @@ class QKAttention(nn.Module):
         q = torch.sum(q, dim=self.sum_dim, keepdim=True)
         # [T, N, NUM_HEADS, 1, L] if qka_type == "token"
         # [T, N, NUM_HEADS, Cph, 1] if qka_type == "channel"
-        attn = self.attn_lif(self.scale * q)
+        attn = self.attn_lif(q)
         x_seq = attn * k
         return x_seq  # [T, N, NUM_HEADS, Cph, L]
 
