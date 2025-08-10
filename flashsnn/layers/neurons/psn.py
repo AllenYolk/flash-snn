@@ -22,18 +22,18 @@ class PSN(nn.Module):
         super().__init__()
         self.T = T
         self.sg_fn = sg_fn
-        self.weight = nn.Parameter(torch.empty([T, T]))
-        self.bias = nn.Parameter(torch.empty([T, 1]))
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        nn.init.constant_(self.bias, -1.)
+        self.psn_weight = nn.Parameter(torch.empty([T, T]))
+        self.psn_bias = nn.Parameter(torch.empty([T, 1]))
+        nn.init.kaiming_uniform_(self.psn_weight, a=math.sqrt(5))
+        nn.init.constant_(self.psn_bias, -1.)
         self.inf_inplace = inf_inplace
         self.bwd_inplace = bwd_inplace
 
     def forward(self, x_seq: torch.Tensor):
         return psn_ops.PSNFunction.apply(
             x_seq,
-            self.weight,
-            self.bias,
+            self.psn_weight,
+            self.psn_bias,
             self.sg_fn,
             self.inf_inplace,
             self.bwd_inplace,
@@ -65,20 +65,20 @@ class SlidingPSN(nn.Module):
             weight = torch.ones([1, k])
             nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
             weight = weight[0]
-        self.weight = nn.Parameter(weight)
-        self.bias = nn.Parameter(torch.tensor(-1.))
+        self.psn_weight = nn.Parameter(weight)
+        self.psn_bias = nn.Parameter(torch.tensor(-1.))
         self.inf_inplace = inf_inplace
         self.bwd_inplace = bwd_inplace
 
     def forward(self, x_seq: torch.Tensor):
         T = x_seq.shape[0]
         weight = psn_ops.GenerateSlidingPSNGemmWeightFunction.apply(
-            self.weight, T
+            self.psn_weight, T
         )
         return psn_ops.PSNFunction.apply(
             x_seq,
             weight,
-            self.bias.expand(T, 1),
+            self.psn_bias.expand(T, 1),
             self.sg_fn,
             self.inf_inplace,
             self.bwd_inplace,
