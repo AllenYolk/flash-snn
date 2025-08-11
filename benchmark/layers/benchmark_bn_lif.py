@@ -69,13 +69,13 @@ def get_triton_bn_lif_forward(C):
 
     def f(x_seq):
         f1 = bn.BatchNorm1d(C).to(DEVICE)
-        f2 = lif.MultistepLIFHardFunction.apply
+        f2 = lif.MultiStepLIFFunction.apply
         out_shape = x_seq.shape
         x_seq = x_seq.flatten(0, 1)
         y_seq = f1(x_seq).reshape(out_shape)
         return f2(
-            y_seq, 0.5, 1., surrogate_kernels.atan_surrogate_backward, True,
-            False, False
+            y_seq, 0.5, 1., surrogate_kernels.atan_surrogate_backward, False,
+            True, False, False
         )
 
     return f

@@ -29,11 +29,7 @@ class LIF(nn.Module):
         self.sg_fn = sg_fn
         self.fwd_inplace = fwd_inplace
         self.bwd_inplace = bwd_inplace
-
-        if soft_reset:
-            self.kernel = lif_ops.MultistepLIFSoftFunction
-        else:
-            self.kernel = lif_ops.MultistepLIFHardFunction
+        self.kernel = lif_ops.MultistepLIFFunction
 
     def forward(self, x_seq: torch.Tensor):
         return self.kernel.apply(
@@ -41,6 +37,7 @@ class LIF(nn.Module):
             self.beta,
             self.vth,
             self.sg_fn,
+            self.soft_reset,
             self.detach_reset,
             self.fwd_inplace,
             self.bwd_inplace,

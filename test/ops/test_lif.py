@@ -18,12 +18,8 @@ DTYPE_LIST = [torch.float32, torch.float16]
 INPLACE_LIST = [True, False]
 
 
-def get_lif_autograd_function(soft_reset: bool):
-    if soft_reset:
-        s2 = "Soft"
-    else:
-        s2 = "Hard"
-    return getattr(lif, f"MultistepLIF{s2}Function").apply
+def get_lif_autograd_function():
+    return getattr(lif, f"MultistepLIFFunction").apply
 
 
 class VanillaLIF(nn.Module):
@@ -73,10 +69,10 @@ def test_lif_ops(beta, detach_reset, soft_reset, input_shape, dtype, inplace):
     grad_y_1 = torch.randn_like(x_seq_1)
     grad_y_2 = grad_y_1.clone().detach()
 
-    f1 = get_lif_autograd_function(soft_reset)
+    f1 = get_lif_autograd_function()
     y1 = f1(
         x_seq_1, beta, 1., surrogate_kernels.atan_surrogate_backward,
-        detach_reset, inplace, inplace
+        soft_reset, detach_reset, inplace, inplace
     )
     y1.backward(grad_y_1)
 

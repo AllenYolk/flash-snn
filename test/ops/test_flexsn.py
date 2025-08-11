@@ -48,9 +48,9 @@ def test_flexsn_inference(beta, shape, dtype):
     )
     s = flexsn.flexsn_inference(f, info["num_outputs"], x)[0]
 
-    ss = lif.MultistepLIFHardFunction.apply(
-        x, beta, 1., surrogate_kernels.atan_surrogate_backward, True, False,
-        False
+    ss = lif.MultistepLIFFunction.apply(
+        x, beta, 1., surrogate_kernels.atan_surrogate_backward, False, True,
+        False, False
     )
 
     assert_close(s, ss, prefix="spike_lif")
@@ -105,9 +105,9 @@ def test_flexsn_forward_backward(beta, shape, dtype):
     s.backward(gs)
 
     # handwritten LIF kernel
-    ss = lif.MultistepLIFHardFunction.apply(
-        x2, beta, 1., surrogate_kernels.atan_surrogate_backward, True, False,
-        False
+    ss = lif.MultistepLIFFunction.apply(
+        x2, beta, 1., surrogate_kernels.atan_surrogate_backward, False, True,
+        False, False
     )
     ss.backward(gs)
 

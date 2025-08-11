@@ -49,7 +49,7 @@ class SJLIF(neuron.LIFNode):
 
 
 def get_lif_autograd_function():
-    return getattr(lif, f"MultistepLIFHardFunction").apply
+    return lif.MultistepLIFFunction.apply
 
 
 def lif_core(x: torch.Tensor, v: torch.Tensor):
@@ -161,8 +161,8 @@ def bacnmark(T, NCL, neuron_type):
         f = get_lif_autograd_function()
         results = triton.testing.do_bench(
             lambda: f(
-                x, 0.5, 1., surrogate_kernels.atan_surrogate_backward, True,
-                False, False
+                x, 0.5, 1., surrogate_kernels.atan_surrogate_backward, False,
+                True, False, False
             ).backward(grad_y),
             quantiles=QUANTILES
         )

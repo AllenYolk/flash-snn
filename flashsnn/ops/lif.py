@@ -77,25 +77,19 @@ def _multistep_lif_forward_kernel(
             tl.store(h_ptrs, h, boundary_check=(1,))
 
 
-#! We implement hard-reset backward and soft-reset backward separately, since
-#! their signatures are different. For soft-reset backward, the spikes are not
-#! needed to compute the gradients.
-
-
 @triton.autotune(
     configs=[
         triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
         for f in [1, 2, 4]
         for w in [2, 4, 8]
     ],
-    key=["T", "dtype", "detach_reset"],
+    key=["T", "dtype", "soft_reset", "detach_reset"],
     restore_value=["grad_x_seq_ptr"],
 )
 @triton.jit
-def _multistep_lif_hard_backward_kernel(
+def _multistep_lif_backward_kernel(
     grad_s_seq_ptr,
     h_seq_ptr,
-    s_seq_ptr,
     grad_x_seq_ptr,
     beta,
     vth,
@@ -104,86 +98,7 @@ def _multistep_lif_hard_backward_kernel(
     BLOCK_NCL: tl.constexpr,
     dtype: tl.constexpr,  # grad_s_seq.dtype; might != h_seq or s_seq.dtype
     sg_fn: tl.constexpr,
-    detach_reset: tl.constexpr,
-):
-    pid_ncl = tl.program_id(0)
-    ncl_offset = pid_ncl * BLOCK_NCL
-
-    grad_v = tl.zeros([1, BLOCK_NCL], dtype=dtype)
-    beta = tl.full([1], beta, dtype=dtype)
-
-    for t in tl.static_range(T - 1, -1, -1):
-        grad_s_ptrs = tl.make_block_ptr(
-            grad_s_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        grad_s = tl.load(
-            grad_s_ptrs, boundary_check=(1,), padding_option="zero"
-        )
-        h_ptrs = tl.make_block_ptr(
-            h_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        h = tl.load(h_ptrs, boundary_check=(1,), padding_option="zero")
-        s_ptrs = tl.make_block_ptr(
-            s_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        s = tl.load(s_ptrs, boundary_check=(1,), padding_option="zero")
-
-        sg = sg_fn(h - vth)
-        if detach_reset:
-            # grad_v = grad_s*sg + grad_v * (one-s)
-            grad_v = tl.fma(grad_s, sg, grad_v * (1.-s))
-        else:
-            # grad_v = (grad_s - grad_v*h) * sg + grad_v * (one-s)
-            grad_v = tl.fma(tl.fma(-grad_v, h, grad_s), sg, grad_v * (1.-s))
-
-        grad_x_ptrs = tl.make_block_ptr(
-            grad_x_seq_ptr,
-            shape=(T, NCL),
-            strides=(NCL, 1),
-            offsets=(t, ncl_offset),
-            block_shape=(1, BLOCK_NCL),
-            order=(1, 0)
-        )
-        tl.store(grad_x_ptrs, grad_v.to(dtype), boundary_check=(1,))
-        grad_v = grad_v * beta
-
-
-@triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_NCL": f * w * 32}, num_warps=w)
-        for f in [1, 2, 4]
-        for w in [2, 4, 8]
-    ],
-    key=["T", "dtype", "detach_reset"],
-    restore_value=["grad_x_seq_ptr"],
-)
-@triton.jit
-def _multistep_lif_soft_backward_kernel(
-    grad_s_seq_ptr,
-    h_seq_ptr,
-    grad_x_seq_ptr,
-    beta,
-    vth,
-    T: tl.constexpr,
-    NCL: tl.constexpr,
-    BLOCK_NCL: tl.constexpr,
-    dtype: tl.constexpr,  # grad_s_seq.dtype; might != h_seq.dtype
-    sg_fn: tl.constexpr,
+    soft_reset: tl.constexpr,
     detach_reset: tl.constexpr,
 ):
     pid_ncl = tl.program_id(0)
@@ -215,10 +130,19 @@ def _multistep_lif_soft_backward_kernel(
         h = tl.load(h_ptrs, boundary_check=(1,), padding_option="zero")
 
         sg = sg_fn(h - vth)
-        if detach_reset:
-            grad_v = tl.fma(grad_s, sg, grad_v)
+        if soft_reset:
+            if detach_reset:
+                grad_v = tl.fma(grad_s, sg, grad_v)
+            else:
+                grad_v = tl.fma(grad_s - grad_v, sg, grad_v)
         else:
-            grad_v = tl.fma(grad_s - grad_v, sg, grad_v)
+            s = (h >= vth).to(dtype)
+            if detach_reset:
+                # grad_v = grad_s*sg + grad_v * (one-s)
+                grad_v = tl.fma(grad_s, sg, grad_v * (1.-s))
+            else:
+                # grad_v = (grad_s - grad_v*h) * sg + grad_v * (one-s)
+                grad_v = tl.fma(tl.fma(-grad_v, h, grad_s), sg, grad_v * (1.-s))
 
         grad_x_ptrs = tl.make_block_ptr(
             grad_x_seq_ptr,
@@ -289,13 +213,13 @@ def multistep_lif_forward(
     return s_seq, h_seq
 
 
-def multistep_lif_hard_backward(
+def multistep_lif_backward(
     grad_s_seq: torch.Tensor,
     h_seq: torch.Tensor,
-    s_seq: torch.Tensor,
     beta: float,
     vth: float,
     sg_fn: Callable,
+    soft_reset: bool,
     detach_reset: bool,
     inplace: bool = False
 ):
@@ -305,10 +229,9 @@ def multistep_lif_hard_backward(
     dtype = grad_s_seq.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
-    _multistep_lif_hard_backward_kernel[grid](
+    _multistep_lif_backward_kernel[grid](
         grad_s_seq,
         h_seq,
-        s_seq,
         grad_x_seq,
         beta,
         vth,
@@ -316,99 +239,37 @@ def multistep_lif_hard_backward(
         NCL=NCL,
         dtype=type_dict[dtype],
         sg_fn=sg_fn,
+        soft_reset=soft_reset,
         detach_reset=detach_reset,
     )
     return grad_x_seq
 
 
-def multistep_lif_soft_backward(
-    grad_s_seq: torch.Tensor,
-    h_seq: torch.Tensor,
-    beta: float,
-    vth: float,
-    sn_fn: Callable,
-    detach_reset: bool,
-    inplace: bool = False
-):
-    T = grad_s_seq.shape[0]
-    NCL = grad_s_seq[0].numel()
-    grad_x_seq = grad_s_seq if inplace else torch.empty_like(grad_s_seq)
-    dtype = grad_s_seq.dtype
-    grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
-
-    _multistep_lif_soft_backward_kernel[grid](
-        grad_s_seq,
-        h_seq,
-        grad_x_seq,
-        beta,
-        vth,
-        T=T,
-        NCL=NCL,
-        dtype=type_dict[dtype],
-        sg_fn=sn_fn,
-        detach_reset=detach_reset,
-    )
-    return grad_x_seq
-
-
-class MultistepLIFHardFunction(autograd.Function):
+class MultistepLIFFunction(autograd.Function):
 
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_fwd
     def forward(
         ctx, x_seq: torch.Tensor, beta: float, vth: float, sg_fn: Callable,
-        detach_reset: bool, fwd_inplace: bool, bwd_inplace: bool
+        soft_reset: bool, detach_reset: bool, fwd_inplace: bool,
+        bwd_inplace: bool
     ):
         if any(ctx.needs_input_grad):
             s_seq, h_seq = multistep_lif_forward(
-                x_seq, beta, vth, False, fwd_inplace
-            )
-            ctx.save_for_backward(h_seq, s_seq)
-            ctx.beta = beta
-            ctx.vth = vth
-            ctx.sg_fn = sg_fn
-            ctx.detach_reset = detach_reset
-            ctx.bwd_inplace = bwd_inplace
-        else:
-            s_seq = multistep_lif_inference(
-                x_seq, beta, vth, False, fwd_inplace
-            )
-        return s_seq
-
-    @staticmethod
-    @contiguous_and_device_guard
-    @amp_custom_bwd
-    def backward(ctx, grad_s_seq: torch.Tensor):
-        h_seq, s_seq = ctx.saved_tensors
-        grad_x_seq = multistep_lif_hard_backward(
-            grad_s_seq, h_seq, s_seq, ctx.beta, ctx.vth, ctx.sg_fn,
-            ctx.detach_reset, ctx.bwd_inplace
-        )
-        return grad_x_seq, None, None, None, None, None, None
-
-
-class MultistepLIFSoftFunction(autograd.Function):
-
-    @staticmethod
-    @contiguous_and_device_guard
-    @amp_custom_fwd
-    def forward(
-        ctx, x_seq: torch.Tensor, beta: float, vth: float, sg_fn: Callable,
-        detach_reset: bool, fwd_inplace: bool, bwd_inplace: bool
-    ):
-        if any(ctx.needs_input_grad):
-            s_seq, h_seq = multistep_lif_forward(
-                x_seq, beta, vth, True, fwd_inplace
+                x_seq, beta, vth, soft_reset, fwd_inplace
             )
             ctx.save_for_backward(h_seq)
             ctx.beta = beta
             ctx.vth = vth
             ctx.sg_fn = sg_fn
+            ctx.soft_reset = soft_reset
             ctx.detach_reset = detach_reset
             ctx.bwd_inplace = bwd_inplace
         else:
-            s_seq = multistep_lif_inference(x_seq, beta, vth, True, fwd_inplace)
+            s_seq = multistep_lif_inference(
+                x_seq, beta, vth, soft_reset, fwd_inplace
+            )
         return s_seq
 
     @staticmethod
@@ -416,8 +277,8 @@ class MultistepLIFSoftFunction(autograd.Function):
     @amp_custom_bwd
     def backward(ctx, grad_s_seq: torch.Tensor):
         h_seq = ctx.saved_tensors[0]
-        grad_x_seq = multistep_lif_soft_backward(
-            grad_s_seq, h_seq, ctx.beta, ctx.vth, ctx.sg_fn, ctx.detach_reset,
-            ctx.bwd_inplace
+        grad_x_seq = multistep_lif_backward(
+            grad_s_seq, h_seq, ctx.beta, ctx.vth, ctx.sg_fn, ctx.soft_reset,
+            ctx.detach_reset, ctx.bwd_inplace
         )
-        return grad_x_seq, None, None, None, None, None, None
+        return grad_x_seq, None, None, None, None, None, None, None

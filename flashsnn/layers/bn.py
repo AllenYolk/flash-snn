@@ -155,11 +155,6 @@ class BatchNorm2dLIF(nn.BatchNorm2d):
         self.detach_reset = detach_reset
         self.sg_fn = sg_fn
 
-        if soft_reset:
-            self.lif_bwd = lif_ops.multistep_lif_soft_backward
-        else:
-            self.lif_bwd = lif_ops.multistep_lif_hard_backward
-
     def forward(
         self,
         x_seq: torch.Tensor,
@@ -171,5 +166,5 @@ class BatchNorm2dLIF(nn.BatchNorm2d):
             x_seq, r_seq, self.training, self.weight, self.bias,
             self.running_mean, self.running_var, self.momentum, self.eps,
             self.track_running_stats, self.beta, self.vth, self.soft_reset,
-            self.detach_reset, self.lif_bwd, self.sg_fn
+            self.detach_reset, self.sg_fn
         )

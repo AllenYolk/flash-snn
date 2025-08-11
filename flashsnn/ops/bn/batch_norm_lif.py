@@ -237,7 +237,6 @@ class BatchNormLIFFunction(autograd.Function):
         vth: float = 1.0,
         soft_reset: bool = False,
         detach_reset: bool = True,
-        lif_bwd: Callable = lif.multistep_lif_hard_backward,
         sg_fn: Callable = surrogate_kernels.atan_surrogate_backward,
     ) -> torch.Tensor:
         x_seq_4d = x_seq.unsqueeze(-1).reshape(*x_seq.shape[:3], -1)
@@ -303,24 +302,22 @@ class BatchNormLIFFunction(autograd.Function):
         ctx.beta = beta
         ctx.vth = vth
         ctx.soft_reset = soft_reset
-        ctx.lif_bwd = lif_bwd
         ctx.sg_fn = sg_fn
         ctx.detach_reset = detach_reset
         if requires_grad:
-            ex = [h_seq] if soft_reset else [h_seq, s_seq]
-            ctx.save_for_backward(x_seq, mean, inv_std, weight, *ex)
+            ctx.save_for_backward(x_seq, mean, inv_std, weight, h_seq)
         return s_seq.view_as(x_seq)
 
     @staticmethod
     @contiguous_and_device_guard
     @amp_custom_bwd
     def backward(ctx, grad_s_seq: torch.Tensor):
-        x_seq, mean, inv_std, weight, *ex = ctx.saved_tensors
+        x_seq, mean, inv_std, weight, h_seq = ctx.saved_tensors
         x_seq_4d = x_seq.unsqueeze(-1).reshape(*x_seq.shape[:3], -1)
 
-        grad_output = ctx.lif_bwd(
-            grad_s_seq, *ex, ctx.beta, ctx.vth, ctx.sg_fn, ctx.detach_reset,
-            False
+        grad_output = lif.multistep_lif_backward(
+            grad_s_seq, h_seq, ctx.beta, ctx.vth, ctx.sg_fn, ctx.soft_reset,
+            ctx.detach_reset, False
         )
         grad_output = grad_output.view_as(x_seq_4d)
 
@@ -360,5 +357,5 @@ class BatchNormLIFFunction(autograd.Function):
             grad_input.view_as(x_seq),
             grad_output.view_as(x_seq) if ctx.residual else None, None,
             grad_weight, grad_bias, None, None, None, None, None, None, None,
-            None, None, None, None
+            None, None, None
         )

@@ -31,11 +31,7 @@ class PLIF(nn.Module):
         self.sg_fn = sg_fn
         self.fwd_inplace = fwd_inplace
         self.bwd_inplace = bwd_inplace
-
-        if soft_reset:
-            self.kernel = plif_ops.MultistepPLIFSoftFunction
-        else:
-            self.kernel = plif_ops.MultistepPLIFHardFunction
+        self.kernel = plif_ops.MultistepPLIFFunction
 
     @staticmethod
     def sigmoid_reverse(y):
@@ -51,6 +47,7 @@ class PLIF(nn.Module):
             self._beta.expand(x_seq.shape),  # apply sigmoid inside the kernel
             self.vth,
             self.sg_fn,
+            self.soft_reset,
             self.detach_reset,
             self.fwd_inplace,
             self.bwd_inplace,
