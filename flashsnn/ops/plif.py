@@ -114,7 +114,7 @@ def _multistep_plif_forward_kernel(
         for f in [1, 2, 4]
         for w in [2, 4, 8]
     ],
-    key=["T", "dtype", "beta_dtype", "soft_reset", "detach_reset"],
+    key=["T", "dtype", "soft_reset", "detach_reset"],
     restore_value=["grad_x_seq_ptr", "grad_beta_seq_ptr"],
 )
 @triton.jit
