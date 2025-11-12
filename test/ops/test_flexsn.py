@@ -33,6 +33,7 @@ def lif_core_generator(beta):
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
 def test_flexsn_inference(beta, shape, dtype):
     x = torch.randn(shape, dtype=dtype, device="cuda")
+    v_init = torch.zeros_like(x[0])
 
     core = lif_core_generator(beta=beta)
     graph = torch2triton.generate_inference_graph(
@@ -46,7 +47,7 @@ def test_flexsn_inference(beta, shape, dtype):
     f = flexsn.get_flexsn_inference_kernel(
         core_str, core_name, info=info, verbose=True
     )
-    s = flexsn.flexsn_inference(f, info["num_outputs"], x)[0]
+    s = flexsn.flexsn_inference(f, info["num_outputs"], x, v_init)[0]
 
     ss = lif.MultistepLIFFunction.apply(
         x, beta, 1., surrogate_kernels.atan_surrogate_backward, False, True,
@@ -65,6 +66,10 @@ def test_flexsn_forward_backward(beta, shape, dtype):
     x1.requires_grad = True
     x2.requires_grad = True
     gs = torch.randn_like(x)
+    v_init = torch.zeros_like(x[0])
+    v_init1, v_init2 = v_init.clone(), v_init.clone()
+    v_init1.requires_grad = True
+    v_init2.requires_grad = True
 
     core = lif_core_generator(beta=beta)
 
@@ -101,7 +106,7 @@ def test_flexsn_forward_backward(beta, shape, dtype):
         core_str, core_name, info=info, verbose=True
     )
 
-    s = flexsn.FlexSNFunction.apply(f_inf, f_fwd, f_bwd, info, x1)
+    s = flexsn.FlexSNFunction.apply(f_inf, f_fwd, f_bwd, info, x1, v_init1)
     s.backward(gs)
 
     # handwritten LIF kernel
@@ -242,6 +247,6 @@ def test_strange_flexsn_forward_backward(shape, dtype):
 
 
 if __name__ == "__main__":
-    test_flexsn_inference(0.5, (4, 5, 3, 224, 224), torch.float32)
+    # test_flexsn_inference(0.5, (4, 5, 3, 224, 224), torch.float32)
     test_flexsn_forward_backward(0.5, (4, 5, 3, 224, 224), torch.float16)
-    test_strange_flexsn_forward_backward((4, 5, 3, 224, 224), torch.float16)
+    # test_strange_flexsn_forward_backward((4, 5, 3, 224, 224), torch.float16)

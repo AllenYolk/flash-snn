@@ -46,11 +46,16 @@ def flexsn_forward(
     return tuple(returns)
 
 
-def flexsn_backward(f: triton.JITFunction, num_inputs: int, *args) -> tuple:
+def flexsn_backward(
+    f: triton.JITFunction, num_inputs: int, num_states: int, *args
+) -> tuple:
     grad_example = args[0]
     T = grad_example.shape[0]
     NCL = grad_example[0].numel()
     grad_inputs = [torch.empty_like(grad_example) for i in range(num_inputs)]
+    grad_inputs += [
+        torch.empty_like(grad_example[0]) for i in range(num_states)
+    ]
     dtype = grad_example.dtype
     grid = lambda meta: (triton.cdiv(NCL, meta['BLOCK_NCL']),)
 
@@ -83,11 +88,12 @@ class FlexSNFunction(autograd.Function):
             )
             outputs = results[:info["num_outputs"]]
             to_save = []
-            for i in info["extra_return_mapping"]:
+            for i in info["c2k_return_mapping"]:
                 to_save.append(results[i])
             ctx.save_for_backward(*to_save)
             ctx.fn_bwd = fn_bwd
             ctx.num_inputs = info["num_inputs"]
+            ctx.num_states = info["num_states"]
         else:
             outputs = flexsn_inference(fn_inf, info["num_outputs"], *args)
         if len(outputs) == 1:
@@ -102,6 +108,6 @@ class FlexSNFunction(autograd.Function):
         required_results = ctx.saved_tensors
         fn_bwd = ctx.fn_bwd
         grads = flexsn_backward(
-            fn_bwd, ctx.num_inputs, *args, *required_results
+            fn_bwd, ctx.num_inputs, ctx.num_states, *args, *required_results
         )
         return None, None, None, None, *grads

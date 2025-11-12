@@ -10,7 +10,10 @@ _CLEANUP_TMP_PYTHON_FILES_REGISTERED_LOCK = threading.Lock()
 def cleanup_tmp_python_files():
     print("Cleaning up temporary python files!")
     for f in Path("/tmp").glob("*.py"):
-        f.unlink(missing_ok=True)
+        try:
+            f.unlink(missing_ok=True)
+        except Exception as e:
+            pass  # ignore errors
 
 
 def ensure_cleanup_tmp_python_files(fn):

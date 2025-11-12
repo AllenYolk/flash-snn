@@ -18,7 +18,9 @@ def _generate_hash(s: str, w: int = 8) -> str:
     return hasher.hexdigest()[:w]
 
 
-def _uw(arg) -> str:  # unwrap
+def _uw(arg) -> str:
+    """Unwrap an argument to its string representation for Triton code generation.
+    """
     if isinstance(arg, fx.Node):
         return arg.name
     elif isinstance(arg, torch.dtype):
@@ -100,12 +102,11 @@ def generate_triton_code_str(
 
     Args:
         graph (fx.Graph)
-        fn_name (str): name of the original PyTorch function. 
+        fn_name (str): name of the original PyTorch function. For generating the Triton kernel name.
         verbose (bool, optional): Defaults to False.
 
     Returns:
-        Tuple[str, str]: the generated Triton code string and the name of the 
-            Triton function.
+        Tuple[str, str]: the generated Triton code string and the name of the Triton function.
     """
     if verbose:
         print(graph)
@@ -113,7 +114,7 @@ def generate_triton_code_str(
     inputs = []
     triton_code_lines = []
     for node in graph.nodes:
-        if node.op == "placeholder":
+        if node.op == "placeholder":  # function inputs
             inputs.append(node.name)
         elif node.op in ["call_function", "call_method"]:
             op_name = (
@@ -133,6 +134,7 @@ def generate_triton_code_str(
                 # only one return value
                 things = node.args[0].name
             else:
+                # multiple return values
                 things = ", ".join(arg.name for arg in node.args[0])
             triton_code_lines.append(f"return {things}")
         else:
@@ -157,12 +159,29 @@ def compile_triton_code_str(
     verbose: bool = False,
     name_space: dict = {},
 ) -> triton.JITFunction:
+    """Compile a Triton code string into a runnable Triton JIT function.
+
+    This is the main interface of graph2triton.py .
+
+    Writes the Triton code to a temporary file, compiles it, and extracts the
+    JIT function from the compiled namespace.
+
+    Args:
+        triton_code (str): The Triton code string to compile.
+        kernel_name (str): The name of the Triton function to extract.
+        verbose (bool, optional): If True, print the path to the temporary file. Defaults to False.
+        name_space (dict, optional): A namespace dictionary to use for `exec`. Defaults to {}.
+
+    Returns:
+        triton.JITFunction: The compiled Triton JIT function.
+    """
     # create a temporary file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(triton_code)
         fpath = Path(f.name)
         if verbose:
             print(f"Triton code `{kernel_name}` written to {fpath}")
+        # the file will not be deleted until the end of the program
 
     name_space.update({
         "triton": triton,
@@ -171,7 +190,7 @@ def compile_triton_code_str(
     })
     with open(fpath, "r") as f:
         code = compile(f.read(), fpath, "exec")
-        exec(code, name_space)
+        exec(code, name_space)  # name_space will be updated
 
     if kernel_name in name_space:
         return name_space[kernel_name]
@@ -188,14 +207,15 @@ def transpile_triton_code(
 ) -> triton.JITFunction:
     """Given a PyTorch function, generate its corresponding Triton JIT function.
 
+    Inference-only.
+
     torch2triton module is still in development. Only a limited set of PyTorch
     operations (mainly element-wise operations) are supported currently.
 
     Args:
         fn (Callable): a PyTorch function.
         example_inputs (tuple): a tuple of example inputs to the function.
-        verbose (bool, optional): If True, print the generated Triton code. 
-            Defaults to False.
+        verbose (bool, optional): If True, print the generated Triton code. Defaults to False.
 
     Returns:
         triton.JITFunction

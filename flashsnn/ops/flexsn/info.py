@@ -9,23 +9,24 @@ def extract_info(
 ) -> dict:
     """Extract useful information from the forward graph.
 
-    The forward core graph should have the following signature:
+    The forward graph should have the following signature:
     [*inputs, *states] -> [*outputs, *states, *intermediates]
 
     The following information will be extracted:
 
-    * fwd_core_returns: the return value names of the forward core. There might\
-        be duplicated tensors in fwd_core_returns, but fwd_core_returns[2:] are\
-        all unique!!!
-    * num_fwd_core_returns: the length of fwd_core_returns
-    * fwd_core_return_symbols: the names of the variables receiving the return 
-        values of the forward core
+    * fwd_core_args
+    * fwd_core_returns: the return value names of the forward graph. There might
+        be duplicated tensors in fwd_core_returns, but
+        fwd_core_returns[num_inputs:] are all unique!
+    * fwd_core_recipients: the names of the variables receiving the return
+        values of the forward core. Duplicated tensors are marked as `_`.
     * fwd_kernel_returns: the return value names of the forward kernel; no
-        duplicated tensors!!!
+        duplicated tensors!
     * num_fwd_kernel_returns: the length of fwd_kernel_returns
-    * extra_return_mapping: the mapping between the index i of fwd_core_returns[2:]\
-        and the index j of fwd_kernel_returns. It can be used to map the return\
-        values of the forward kernel to the input of the backward core.
+    * c2k_return_mapping: the mapping from the index i of
+        fwd_core_returns[num_inputs+num_states:] (a.k.a. the intermediate result
+        list) and the index j of fwd_kernel_returns. It can be used to retrieve
+        required intermediate states from the forward kernel's return values.
 
     Args:
         fwd_graph (fx.Graph): the forward computational graph.
@@ -47,48 +48,46 @@ def extract_info(
     assert len(fwd_core_args) == num_args
     assert len(fwd_core_returns) >= num_inference_returns
 
-    symbols = {}  # var in core -> var in kernel
+    symbols = {}  # varname in core -> varname in kernel
     fwd_kernel_returns = []
-    fwd_core_return_symbols = []
-    for i, s in enumerate(fwd_core_returns[:num_outputs]):
+    fwd_core_recipients = []
+    for i, s in enumerate(fwd_core_returns[:num_outputs]):  # 1. outputs
         symbols[s] = f"s{i}"
+        fwd_core_recipients.append(f"s{i}")
         fwd_kernel_returns.append(f"s{i}")
-        fwd_core_return_symbols.append(f"s{i}")
-    for i, v in enumerate(fwd_core_returns[num_outputs:num_inference_returns]):
+
+    for i, v in enumerate(
+        fwd_core_returns[num_outputs:num_inference_returns]
+    ):  # 2. states
         symbols[v] = f"v{i}"
-        fwd_core_return_symbols.append(f"v{i}")
+        fwd_core_recipients.append(f"v{i}")
+        # states is not returned by the forward kernel
 
     n = 0
-    extra_return_mapping = []
+    c2k_return_mapping = []
     for ret in fwd_core_returns[num_inference_returns:]:  # intermediates
         if ret in symbols:  # duplicated core return detected
-            fwd_core_return_symbols.append("_")
+            fwd_core_recipients.append("_")  # omit the return value
             sym = symbols[ret]
             if sym.startswith("v") and (sym not in fwd_kernel_returns):
-                # return the state as an intermediate value!
+                # state as intermediate values; should return by kernel
                 fwd_kernel_returns.append(sym)
-        else:
+        else:  # not duplicated
             symbols[ret] = f"res{n}"
             fwd_kernel_returns.append(f"res{n}")
-            fwd_core_return_symbols.append(f"res{n}")
+            fwd_core_recipients.append(f"res{n}")
             n += 1
         idx = fwd_kernel_returns.index(symbols[ret])  # locate the symbol
-        extra_return_mapping.append(idx)
-
-    assert (
-        len(extra_return_mapping) == len(fwd_core_returns) -
-        num_inference_returns
-    )
+        c2k_return_mapping.append(idx)
 
     return {
         "num_inputs": num_inputs,
         "num_outputs": num_outputs,
         "num_states": num_states,
-        "fwd_core_inputs": fwd_core_args,
+        "fwd_core_args": fwd_core_args,
         "fwd_core_returns": fwd_core_returns,
-        "num_fwd_core_returns": len(fwd_core_returns),
-        "fwd_core_return_symbols": fwd_core_return_symbols,
+        "fwd_core_recipients": fwd_core_recipients,
         "fwd_kernel_returns": fwd_kernel_returns,
         "num_fwd_kernel_returns": len(fwd_kernel_returns),
-        "extra_return_mapping": extra_return_mapping,
+        "c2k_return_mapping": c2k_return_mapping,
     }

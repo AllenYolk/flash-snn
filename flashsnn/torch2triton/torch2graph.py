@@ -9,6 +9,8 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class GraphCollector:
+    """Provide this class to aot_function to collect forward and backward graph.
+    """
 
     def __init__(self):
         self.fwd_graph = None
@@ -46,16 +48,28 @@ def _optimize_graph(graph: fx.Graph):
 
 
 def generate_inference_graph(fn: Callable, example_inputs: tuple):
+    """Generate an optimized inference graph from a PyTorch function.
+
+    For inference scenarios, all input tensors are set to `requires_grad=False`
+    to disable gradient tracking.
+
+    Args:
+        fn (Callable): The PyTorch function to generate the inference graph for.
+        example_inputs (tuple): A tuple of example inputs to trace the function's execution.
+
+    Returns:
+        fx.Graph: The optimized inference graph.
+    """
     collector = GraphCollector()
     f = aot_function(
         fn,
         fw_compiler=collector.get_forward_compiler(),
         bw_compiler=collector.get_backward_compiler()
-    )
+    )  # ahead-of-time autograd
 
     for i in example_inputs:
         if isinstance(i, torch.Tensor):
-            i.requires_grad = False
+            i.requires_grad = False  # for inference
 
     # feed the fake inputs
     ys = f(*example_inputs)
@@ -67,6 +81,22 @@ def generate_forward_and_backward_graph(
     example_inputs: tuple,
     requires_grad: Optional[Tuple[bool]] = None
 ):
+    """Generate optimized forward and backward graphs from a PyTorch function.
+
+    Allows specifying gradient requirements for input tensors; if not specified,
+    all tensors default to `requires_grad=True`.
+
+    Args:
+        fn (Callable): The PyTorch function to generate the graphs for.
+        example_inputs (tuple): A tuple of example inputs to trace the function's execution.
+        requires_grad (Tuple[bool], optional): A tuple indicating whether each
+            input tensor requires gradient. If given, must match the length of
+            `example_inputs`. Defaults to None, where all input tensors are set
+            to `requires_grad=True`.
+
+    Returns:
+        Tuple[fx.Graph, fx.Graph]: the optimized forward and backward graph.
+    """
     collector = GraphCollector()
     f = aot_function(
         fn,
