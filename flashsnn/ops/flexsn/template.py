@@ -83,8 +83,8 @@ def convert_and_store(pointer, value, boundary_check):
 )
 @triton.jit
 def flexsn_{kernel_type}_kernel_{hash}(
-    {input_signature}, # inputs (including init states)
-    {output_signature}, # outputs
+    {kernel_input_signature}, # inputs (including init states)
+    {kernel_output_signature}, # outputs
     T: tl.constexpr,
     NCL: tl.constexpr,
     BLOCK_NCL: tl.constexpr,
@@ -117,15 +117,15 @@ def get_flexsn_inference_kernel(
     num_states = info["num_states"]
     num_outputs = info["num_outputs"]
 
-    input_signature = f",\n{INDENTATION}".join([
+    kernel_input_signature = f",\n{INDENTATION}".join([
         f"x{i}_seq_ptr" for i in range(num_inputs)
     ])
-    input_signature += f",\n{INDENTATION}"
-    input_signature += f",\n{INDENTATION}".join([
+    kernel_input_signature += f",\n{INDENTATION}"
+    kernel_input_signature += f",\n{INDENTATION}".join([
         f"v{i}_init_ptr" for i in range(num_states)
     ])
 
-    output_signature = f",\n{INDENTATION}".join([
+    kernel_output_signature = f",\n{INDENTATION}".join([
         f"s{i}_seq_ptr" for i in range(num_outputs)
     ])
 
@@ -156,8 +156,8 @@ def get_flexsn_inference_kernel(
         autotune_restore=autotune_restore,
         kernel_type="inference",
         hash=hash,
-        input_signature=input_signature,
-        output_signature=output_signature,
+        kernel_input_signature=kernel_input_signature,
+        kernel_output_signature=kernel_output_signature,
         init_state_loads=init_state_loads,
         loop_range="0, T, 1",
         loads=loads,
@@ -194,15 +194,15 @@ def get_flexsn_forward_kernel(
     fwd_kernel_returns = info["fwd_kernel_returns"]  # unique and meaningful
     fwd_core_recipients = info["fwd_core_recipients"]  # `_` for duplicates
 
-    input_signature = f",\n{INDENTATION}".join([
+    kernel_input_signature = f",\n{INDENTATION}".join([
         f"x{i}_seq_ptr" for i in range(num_inputs)
     ])
-    input_signature += f",\n{INDENTATION}"
-    input_signature += f",\n{INDENTATION}".join([
+    kernel_input_signature += f",\n{INDENTATION}"
+    kernel_input_signature += f",\n{INDENTATION}".join([
         f"v{i}_init_ptr" for i in range(num_states)
     ])
 
-    output_signature = f",\n{INDENTATION}".join([
+    kernel_output_signature = f",\n{INDENTATION}".join([
         f"{r}_seq_ptr" for r in fwd_kernel_returns
     ])
 
@@ -229,8 +229,8 @@ def get_flexsn_forward_kernel(
         autotune_restore=autotune_restore,
         kernel_type="forward",
         hash=hash,
-        input_signature=input_signature,
-        output_signature=output_signature,
+        kernel_input_signature=kernel_input_signature,
+        kernel_output_signature=kernel_output_signature,
         init_state_loads=init_state_loads,
         loop_range="0, T, 1",
         loads=loads,
@@ -270,19 +270,19 @@ def get_flexsn_backward_kernel(
 
     assert n + num_outputs == len(fwd_kernel_returns)
 
-    input_signature = f",\n{INDENTATION}".join([
+    kernel_input_signature = f",\n{INDENTATION}".join([
         f"grad_s{i}_seq_ptr" for i in range(num_outputs)
     ])
-    input_signature += f",\n{INDENTATION}"
-    input_signature += f",\n{INDENTATION}".join([
+    kernel_input_signature += f",\n{INDENTATION}"
+    kernel_input_signature += f",\n{INDENTATION}".join([
         f"res{i}_seq_ptr" for i in range(n)
     ])
 
-    output_signature = f",\n{INDENTATION}".join([
+    kernel_output_signature = f",\n{INDENTATION}".join([
         f"grad_x{i}_seq_ptr" for i in range(num_inputs)
     ])
-    output_signature += f",\n{INDENTATION}"
-    output_signature += f",\n{INDENTATION}".join([
+    kernel_output_signature += f",\n{INDENTATION}"
+    kernel_output_signature += f",\n{INDENTATION}".join([
         f"grad_v{i}_init_ptr" for i in range(num_inputs)
     ])
 
@@ -291,10 +291,10 @@ def get_flexsn_backward_kernel(
     ])
     autotune_restore += f", "
     autotune_restore += f", ".join([
-        f'"grad_v{i}_init_ptr"' for i in range(num_inputs)
+        f'"grad_v{i}_init_ptr"' for i in range(num_states)
     ])
 
-    init_state_loads = "\n{INDENTATION}".join([
+    init_state_loads = f"\n{INDENTATION}".join([
         f"grad_v{i} = tl.zeros([1, BLOCK_NCL], dtype=dtype)"
         for i in range(num_states)
     ])
@@ -303,10 +303,10 @@ def get_flexsn_backward_kernel(
         load_template.format(name=f"grad_s{i}") for i in range(num_outputs)
     ])
     loads += "".join([load_template.format(name=f"res{i}") for i in range(n)])
-
     stores = "".join([
         store_template.format(name=f"grad_x{i}") for i in range(num_inputs)
     ])
+
     lhs = ", ".join([f"grad_x{i}" for i in range(num_inputs)])
     lhs += ", "
     lhs += ", ".join([f"grad_v{i}" for i in range(num_states)])
@@ -326,8 +326,8 @@ def get_flexsn_backward_kernel(
         autotune_restore=autotune_restore,
         kernel_type="backward",
         hash=hash,
-        input_signature=input_signature,
-        output_signature=output_signature,
+        kernel_input_signature=kernel_input_signature,
+        kernel_output_signature=kernel_output_signature,
         init_state_loads=init_state_loads,
         loop_range="T-1, -1, -1",
         loads=loads,

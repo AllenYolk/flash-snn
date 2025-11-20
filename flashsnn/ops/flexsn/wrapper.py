@@ -80,7 +80,7 @@ class FlexSNFunction(autograd.Function):
         fn_fwd: triton.JITFunction,
         fn_bwd: triton.JITFunction,
         info: dict,
-        *args,  # len = num_inputs
+        *args,  # len = num_inputs; including initial states
     ):
         if any(ctx.needs_input_grad):
             results = flexsn_forward(

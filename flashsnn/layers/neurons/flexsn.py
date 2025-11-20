@@ -1,5 +1,4 @@
 from typing import Callable, Tuple, Optional
-import math
 
 import torch
 import torch.nn as nn
@@ -80,13 +79,20 @@ class FlexSN(nn.Module):
             core_str, core_name, info=self.info
         )
 
+    def init_states(self, *inputs):
+        return tuple([
+            torch.zeros_like(inputs[0][0]) for _ in range(self.num_states)
+        ])
+
     def forward(self, *inputs):
+        states0 = self.init_states(*inputs)
         return flexsn_ops.FlexSNFunction.apply(
             self.f_inf,
             self.f_fwd,
             self.f_bwd,
             self.info,
             *inputs,
+            *states0,
         )
 
     def extra_repr(self):

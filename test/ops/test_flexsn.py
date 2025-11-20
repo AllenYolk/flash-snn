@@ -171,6 +171,14 @@ def test_strange_flexsn_forward_backward(shape, dtype):
     y1, y2 = x.clone(), x.clone()
     y1.requires_grad = True
     y2.requires_grad = True
+    v_init = torch.zeros_like(x[0])
+    v_init1, v_init2 = v_init.clone(), v_init.clone()
+    v_init1.requires_grad = True
+    v_init2.requires_grad = True
+    rho_init = torch.zeros_like(x[0])
+    rho_init1, rho_init2 = rho_init.clone(), rho_init.clone()
+    rho_init1.requires_grad = True
+    rho_init2.requires_grad = True
     gs = torch.randn_like(x)
 
     core = strange_lif_core
@@ -209,7 +217,9 @@ def test_strange_flexsn_forward_backward(shape, dtype):
         core_str, core_name, info=info, verbose=True
     )
 
-    s1, s2 = flexsn.FlexSNFunction.apply(f_inf, f_fwd, f_bwd, info, x1, y1)
+    s1, s2 = flexsn.FlexSNFunction.apply(
+        f_inf, f_fwd, f_bwd, info, x1, y1, v_init1, rho_init1
+    )
     s = s1 * s2
     s.backward(gs)
 
@@ -248,5 +258,5 @@ def test_strange_flexsn_forward_backward(shape, dtype):
 
 if __name__ == "__main__":
     # test_flexsn_inference(0.5, (4, 5, 3, 224, 224), torch.float32)
-    test_flexsn_forward_backward(0.5, (4, 5, 3, 224, 224), torch.float16)
-    # test_strange_flexsn_forward_backward((4, 5, 3, 224, 224), torch.float16)
+    # test_flexsn_forward_backward(0.5, (4, 5, 3, 224, 224), torch.float16)
+    test_strange_flexsn_forward_backward((4, 5, 3, 224, 224), torch.float16)
