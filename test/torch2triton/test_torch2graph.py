@@ -4,9 +4,11 @@ sys.path.append("./")
 
 import torch
 import torch.fx as fx
+from spikingjelly.activation_based import surrogate
 
 from flashsnn import torch2triton
-from flashsnn.ops import spike_fn
+
+spike_fn = surrogate.ATan(alpha=2.)
 
 
 def lif_core_generator(beta):

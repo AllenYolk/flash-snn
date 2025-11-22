@@ -12,12 +12,14 @@ torch._dynamo.config.suppress_errors = True
 from spikingjelly.activation_based import surrogate
 import triton
 
-from flashsnn.ops import flexsn, spike_fn
+from flashsnn.ops import flexsn
 from flashsnn import torch2triton
 
 DEVICE = "cuda"
 DTYPE = torch.float32
 QUANTILES = [0.5, 0.2, 0.8]
+
+spike_fn = surrogate.ATan(alpha=2.)
 
 
 def strange_lif_core(

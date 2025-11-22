@@ -24,26 +24,27 @@ class FlexSN(nn.Module):
 
         Args:
             core (Callable): a function describing the single-step inference
-                dynamics of the spiking neuron. It should have the following 
-                signature: [*inputs, *states] -> [*outputs, *states], and the 
+                dynamics of the spiking neuron. It should have the following
+                signature: [*inputs, *states] -> [*outputs, *states], and the
                 arguments and return values should all be tensors.
-            example_inputs (Tuple[torch.Tensor]): example inputs to `core` 
-                with the form of [*inputs, *states]. 
-            num_inputs (int): number of inputs. It should strictly match the 
+            example_inputs (Tuple[torch.Tensor]): example inputs to `core`
+                with the form of [*inputs, *states].
+            num_inputs (int): number of inputs. It should strictly match the
                 number of "inputs" in `core`'s arguments and `example_inputs`.
-            num_states (int): number of states. It should strictly match the 
+            num_states (int): number of states. It should strictly match the
                 number of "states" in `core`'s arguments, `core`'s return values,
                 and `example_inputs`.
-            num_outputs (int): number of outputs. It should strictly match the 
+            num_outputs (int): number of outputs. It should strictly match the
                 number of "outputs" in `core`'s return values.
             requires_grad (Optional[Tuple[bool]], optional): whether the input
                 tensors (i.e. [*inputs, *states]) requires gradients. This info
                 is used to generate the forward and backward graphs. Its length
                 should match the number of `core`'s arguments and the length of
-                `example_inputs`. If None, it will be set at the `requires_grad` 
+                `example_inputs`. If None, it will be set at the `requires_grad`
                 attributes of `example_inputs`. Defaults to None.
         """
         super().__init__()
+
         self.core = core
         self.inf_graph = torch2triton.generate_inference_graph(
             core, example_inputs

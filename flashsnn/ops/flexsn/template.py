@@ -265,10 +265,7 @@ def get_flexsn_backward_kernel(
     num_outputs = info["num_outputs"]
     num_inputs = info["num_inputs"]
     num_states = info["num_states"]
-    fwd_kernel_returns = info["fwd_kernel_returns"]
     n = len(info["c2k_return_mapping"])  # number of intermediate results
-
-    assert n + num_outputs == len(fwd_kernel_returns)
 
     kernel_input_signature = f",\n{INDENTATION}".join([
         f"grad_s{i}_seq_ptr" for i in range(num_outputs)

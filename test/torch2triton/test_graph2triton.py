@@ -6,14 +6,17 @@ sys.path.append("./")
 import torch
 import triton
 import triton.language as tl
+from spikingjelly.activation_based import surrogate
 
 from flashsnn import torch2triton
-from flashsnn.ops import surrogate_kernels, lif, spike_fn
+from flashsnn.ops import surrogate_kernels, lif
 from flashsnn.utils import assert_close, type_dict
 
 SHAPE_LIST = [(4, 3, 3, 224, 224), (17, 5, 700)]
 DTYPE_LIST = [torch.float32, torch.float16]
 BETA_LIST = [0.5, 0., 0.9, 0.1]
+
+spike_fn = surrogate.ATan(alpha=2.)
 
 
 def sigmoid_surrogate_torch(h: torch.Tensor) -> torch.Tensor:

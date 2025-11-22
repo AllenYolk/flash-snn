@@ -8,13 +8,14 @@ import torch.nn as nn
 from spikingjelly.activation_based import surrogate
 
 from flashsnn.layers import FlexSN
-from flashsnn.ops import spike_fn
 from flashsnn.ops import lif, surrogate_kernels
 from flashsnn.utils import assert_close
 
 BETA_LIST = [0.5, 0.1, 0.9]
 SHAPE_LIST = [(4, 5, 3, 224, 224), (11, 7, 700)]
 DTYPE_LIST = [torch.float32, torch.float16]
+
+spike_fn = surrogate.ATan(alpha=2.)
 
 
 def lif_core_generator(beta):
@@ -84,7 +85,6 @@ class StrangeLIF(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.sg = surrogate.ATan()
 
     def forward(self, x_seq: torch.Tensor, y_seq: torch.Tensor):
         T = x_seq.shape[0]
@@ -94,8 +94,8 @@ class StrangeLIF(nn.Module):
         ss_seq = torch.empty_like(x_seq)
         for t in range(T):
             h = 0.5*v + x_seq[t]
-            s = self.sg(h - (1.+rho))
-            ss = self.sg(h - 1.)
+            s = spike_fn(h - (1.+rho))
+            ss = spike_fn(h - 1.)
             rho = 0.99*rho + s
             v = h * (1.-s)
             vv = torch.where(

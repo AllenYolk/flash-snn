@@ -32,17 +32,21 @@ def _uw(arg) -> str:
 FX_TO_TRITON = {
     "add":
         lambda args, kwargs: f"{_uw(args[0])} + {_uw(args[1])}",
-    "sub":
-        lambda args, kwargs: f"{_uw(args[0])} - {_uw(args[1])}",
-    "mul":
-        lambda args, kwargs: f"{_uw(args[0])} * {_uw(args[1])}",
+    "add.Scalar":
+        lambda args, kwargs: f"{_uw(args[0])} + {_uw(args[1])}",
     "add.Tensor":
         lambda args, kwargs: f"{_uw(args[0])} + {_uw(args[1])}",
+    "sub":
+        lambda args, kwargs: f"{_uw(args[0])} - {_uw(args[1])}",
     "sub.Tensor":
         lambda args, kwargs: f"{_uw(args[0])} - {_uw(args[1])}",
     "rsub.Scalar":
         lambda args, kwargs: f"{_uw(args[1])} - {_uw(args[0])}",
+    "mul":
+        lambda args, kwargs: f"{_uw(args[0])} * {_uw(args[1])}",
     "mul.Tensor":
+        lambda args, kwargs: f"{_uw(args[0])} * {_uw(args[1])}",
+    "mul.Scalar":
         lambda args, kwargs: f"{_uw(args[0])} * {_uw(args[1])}",
     "bitwise_and.Tensor":
         lambda args, kwargs: f"{_uw(args[0])} & {_uw(args[1])}",
@@ -74,8 +78,6 @@ FX_TO_TRITON = {
         lambda args, kwargs: f"(1. / {_uw(args[0])}).to({_uw(args[0])}.dtype)",
     "neg.default":
         lambda args, kwargs: f"-{_uw(args[0])}",
-    "spike_fn.default":
-        lambda args, kwargs: f"({_uw(args[0])} >= 0.).to({_uw(args[0])}.dtype)",
     "detach.default":
         lambda args, kwargs: f"{_uw(args[0])}",
     "sigmoid.default": # triton does not support exponential operations on fp16
@@ -120,7 +122,7 @@ def generate_triton_code_str(
             op_name = (
                 node.target.__name__
                 if node.op == "call_function" else node.target
-            )  # e.g. mul.Tensor, spike_fn.default, rsub.Scalar, ...
+            )  # e.g. mul.Tensor, rsub.Scalar, ...
             if op_name in FX_TO_TRITON:  # apply the transpile rule
                 rhs = FX_TO_TRITON[op_name](node.args, node.kwargs)
                 triton_code_lines.append(f"{node.name} = {rhs}")

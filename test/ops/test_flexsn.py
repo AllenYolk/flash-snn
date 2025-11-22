@@ -8,13 +8,15 @@ import torch.nn as nn
 from spikingjelly.activation_based import surrogate
 
 from flashsnn import torch2triton
-from flashsnn.ops import flexsn, spike_fn
+from flashsnn.ops import flexsn
 from flashsnn.ops import lif, surrogate_kernels
 from flashsnn.utils import assert_close
 
 BETA_LIST = [0.5, 0.1, 0.9]
 SHAPE_LIST = [(4, 5, 3, 224, 224), (11, 7, 700)]
 DTYPE_LIST = [torch.float32, torch.float16]
+
+spike_fn = surrogate.ATan(alpha=2.)
 
 
 def lif_core_generator(beta):
@@ -32,12 +34,12 @@ def lif_core_generator(beta):
 @pytest.mark.parametrize("shape", SHAPE_LIST)
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
 def test_flexsn_inference(beta, shape, dtype):
-    x = torch.randn(shape, dtype=dtype, device="cuda")
-    v_init = torch.zeros_like(x[0])
+    x_seq = torch.randn(shape, dtype=dtype, device="cuda")
+    v_init = torch.zeros_like(x_seq[0])
 
     core = lif_core_generator(beta=beta)
     graph = torch2triton.generate_inference_graph(
-        core, (x, torch.randn_like(x))
+        core, (x_seq, torch.randn_like(x_seq))
     )
     core_str, core_name = torch2triton.generate_triton_code_str(
         graph, core.__name__, verbose=True
@@ -47,26 +49,26 @@ def test_flexsn_inference(beta, shape, dtype):
     f = flexsn.get_flexsn_inference_kernel(
         core_str, core_name, info=info, verbose=True
     )
-    s = flexsn.flexsn_inference(f, info["num_outputs"], x, v_init)[0]
+    s_seq = flexsn.flexsn_inference(f, info["num_outputs"], x_seq, v_init)[0]
 
-    ss = lif.MultistepLIFFunction.apply(
-        x, beta, 1., surrogate_kernels.atan_surrogate_backward, False, True,
+    ss_seq = lif.MultistepLIFFunction.apply(
+        x_seq, beta, 1., surrogate_kernels.atan_surrogate_backward, False, True,
         False, False
     )
 
-    assert_close(s, ss, prefix="spike_lif")
+    assert_close(s_seq, ss_seq, prefix="spike_lif")
 
 
 @pytest.mark.parametrize("beta", BETA_LIST)
 @pytest.mark.parametrize("shape", SHAPE_LIST)
 @pytest.mark.parametrize("dtype", DTYPE_LIST)
 def test_flexsn_forward_backward(beta, shape, dtype):
-    x = torch.randn(shape, dtype=dtype, device="cuda")
-    x1, x2 = x.clone(), x.clone()
-    x1.requires_grad = True
-    x2.requires_grad = True
-    gs = torch.randn_like(x)
-    v_init = torch.zeros_like(x[0])
+    x_seq = torch.randn(shape, dtype=dtype, device="cuda")
+    x1_seq, x2_seq = x_seq.clone(), x_seq.clone()
+    x1_seq.requires_grad = True
+    x2_seq.requires_grad = True
+    gs = torch.randn_like(x_seq)
+    v_init = torch.zeros_like(x_seq[0])
     v_init1, v_init2 = v_init.clone(), v_init.clone()
     v_init1.requires_grad = True
     v_init2.requires_grad = True
@@ -75,10 +77,10 @@ def test_flexsn_forward_backward(beta, shape, dtype):
 
     # prepare graphs
     graph = torch2triton.generate_inference_graph(
-        core, (x, torch.randn_like(x))
+        core, (x_seq, torch.randn_like(x_seq))
     )
     fwd_graph, bwd_graph = torch2triton.generate_forward_and_backward_graph(
-        core, (x, torch.randn_like(x)), requires_grad=(True, True)
+        core, (x_seq, torch.randn_like(x_seq)), requires_grad=(True, True)
     )
     info = flexsn.extract_info(
         fwd_graph, num_inputs=1, num_states=1, num_outputs=1
@@ -106,18 +108,20 @@ def test_flexsn_forward_backward(beta, shape, dtype):
         core_str, core_name, info=info, verbose=True
     )
 
-    s = flexsn.FlexSNFunction.apply(f_inf, f_fwd, f_bwd, info, x1, v_init1)
-    s.backward(gs)
+    s_seq = flexsn.FlexSNFunction.apply(
+        f_inf, f_fwd, f_bwd, info, x1_seq, v_init1
+    )
+    s_seq.backward(gs)
 
     # handwritten LIF kernel
-    ss = lif.MultistepLIFFunction.apply(
-        x2, beta, 1., surrogate_kernels.atan_surrogate_backward, False, True,
-        False, False
+    ss_seq = lif.MultistepLIFFunction.apply(
+        x2_seq, beta, 1., surrogate_kernels.atan_surrogate_backward, False,
+        True, False, False
     )
-    ss.backward(gs)
+    ss_seq.backward(gs)
 
-    assert_close(s, ss, prefix="spike")
-    assert_close(x1.grad, x2.grad, prefix="grad_x")
+    assert_close(s_seq, ss_seq, prefix="spike")
+    assert_close(x1_seq.grad, x2_seq.grad, prefix="grad_x")
 
 
 def strange_lif_core(
@@ -138,7 +142,6 @@ class StrangeLIF(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.sg = surrogate.ATan()
 
     def forward(self, x_seq: torch.Tensor, y_seq: torch.Tensor):
         T = x_seq.shape[0]
@@ -148,8 +151,8 @@ class StrangeLIF(nn.Module):
         ss_seq = torch.empty_like(x_seq)
         for t in range(T):
             h = 0.5*v + x_seq[t]
-            s = self.sg(h - (1.+rho))
-            ss = self.sg(h - 1.)
+            s = spike_fn(h - (1.+rho))
+            ss = spike_fn(h - 1.)
             rho = 0.99*rho + s
             v = h * (1.-s)
             vv = h * (1.-ss)

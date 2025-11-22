@@ -11,12 +11,14 @@ torch._dynamo.config.suppress_errors = True
 import triton
 from spikingjelly.activation_based import surrogate, neuron, functional
 
-from flashsnn.ops import lif, spike_fn, flexsn, surrogate_kernels
+from flashsnn.ops import lif, flexsn, surrogate_kernels
 from flashsnn import torch2triton
 
 DEVICE = "cuda"
 DTYPE = torch.float32
 QUANTILES = [0.5, 0.2, 0.8]
+
+spike_fn = surrogate.ATan(alpha=2.)
 
 
 class VanillaLIF(nn.Module):

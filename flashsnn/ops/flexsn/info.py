@@ -17,7 +17,7 @@ def extract_info(
     * fwd_core_args
     * fwd_core_returns: the return value names of the forward graph. There might
         be duplicated tensors in fwd_core_returns, but
-        fwd_core_returns[num_inputs:] are all unique!
+        fwd_core_returns[num_inputs+num_states:] are all unique!
     * fwd_core_recipients: the names of the variables receiving the return
         values of the forward core. Duplicated tensors are marked as `_`.
     * fwd_kernel_returns: the return value names of the forward kernel; no
@@ -25,7 +25,7 @@ def extract_info(
     * num_fwd_kernel_returns: the length of fwd_kernel_returns
     * c2k_return_mapping: the mapping from the index i of
         fwd_core_returns[num_inputs+num_states:] (a.k.a. the intermediate result
-        list) and the index j of fwd_kernel_returns. It can be used to retrieve
+        list) to the index j of fwd_kernel_returns. It can be used to retrieve
         required intermediate states from the forward kernel's return values.
 
     Args:
@@ -44,9 +44,9 @@ def extract_info(
             fwd_core_returns.append(a.name)
 
     num_args = num_inputs + num_states
-    num_inference_returns = num_outputs + num_states
+    num_outputs_states = num_outputs + num_states
     assert len(fwd_core_args) == num_args
-    assert len(fwd_core_returns) >= num_inference_returns
+    assert len(fwd_core_returns) >= num_outputs_states
 
     symbols = {}  # varname in core -> varname in kernel
     fwd_kernel_returns = []
@@ -57,7 +57,7 @@ def extract_info(
         fwd_kernel_returns.append(f"s{i}")
 
     for i, v in enumerate(
-        fwd_core_returns[num_outputs:num_inference_returns]
+        fwd_core_returns[num_outputs:num_outputs_states]
     ):  # 2. states
         symbols[v] = f"v{i}"
         fwd_core_recipients.append(f"v{i}")
@@ -65,7 +65,7 @@ def extract_info(
 
     n = 0
     c2k_return_mapping = []
-    for ret in fwd_core_returns[num_inference_returns:]:  # intermediates
+    for ret in fwd_core_returns[num_outputs_states:]:  # intermediates
         if ret in symbols:  # duplicated core return detected
             fwd_core_recipients.append("_")  # omit the return value
             sym = symbols[ret]
